@@ -239,12 +239,16 @@ if __name__ == "__main__":
                 # OAuth metadata discovery — return minimal response so MCP Inspector
                 # knows this server uses Bearer token auth (not a full OAuth flow)
                 if path == "/.well-known/oauth-authorization-server":
-                    base = scope.get("root_path", "")
                     import json as _json
+                    req_headers = dict(scope.get("headers", []))
+                    host = req_headers.get(b"host", b"localhost").decode()
+                    proto = req_headers.get(b"x-forwarded-proto", b"https").decode()
+                    base = f"{proto}://{host}"
                     body = _json.dumps({
                         "issuer": base,
                         "token_endpoint": f"{base}/token",
                         "response_types_supported": ["token"],
+                        "grant_types_supported": ["urn:ietf:params:oauth:grant-type:token-exchange"],
                     }).encode()
                     await send({"type": "http.response.start", "status": 200,
                                 "headers": [(b"content-type", b"application/json"),
