@@ -19,13 +19,20 @@ from shared.rxnav_client import get_interactions, resolve_medications_to_rxcuis
 logger = logging.getLogger(__name__)
 
 
+def _status_msg(text: str):
+    """Create a Message object for status updates."""
+    return new_agent_text_message(text)
+
+
 def _parse_user_input(context: RequestContext) -> dict:
     """Extract patient_id, fhir_base_url, symptoms, and skill from user message."""
     parts = context.message.parts if context.message else []
     text = ""
     for part in parts:
-        if hasattr(part, "text"):
-            text += part.text
+        # Parts are wrapped — access the inner part via .root
+        inner = part.root if hasattr(part, "root") else part
+        if hasattr(inner, "text"):
+            text += inner.text
 
     # Try to parse as JSON first
     try:
@@ -63,9 +70,9 @@ class CDSAgentExecutor(AgentExecutor):
 
         patient_id = params["patient_id"]
         if not patient_id:
-            await updater.update_status(TaskState.failed, "No patient_id provided.")
-            await event_queue.enqueue_event(
-                new_agent_text_message("Error: Please provide a patient_id.")
+            await updater.update_status(
+                TaskState.failed,
+                message=_status_msg("Error: No patient_id provided. Send a patient_id as text or JSON."),
             )
             return
 
@@ -81,9 +88,9 @@ class CDSAgentExecutor(AgentExecutor):
                 await self._comprehensive_review(updater, event_queue, params, token)
         except Exception as e:
             logger.error(f"Agent execution failed: {e}", exc_info=True)
-            await updater.update_status(TaskState.failed, f"Execution error: {str(e)}")
-            await event_queue.enqueue_event(
-                new_agent_text_message(f"Error: {str(e)}")
+            await updater.update_status(
+                TaskState.failed,
+                message=_status_msg(f"Error: {str(e)}"),
             )
 
     async def _comprehensive_review(
@@ -93,22 +100,24 @@ class CDSAgentExecutor(AgentExecutor):
         fhir_base_url = params["fhir_base_url"]
 
         # Step 1: Get patient summary
-        await updater.update_status(TaskState.working, "Step 1/4: Fetching patient data from FHIR...")
+        await updater.update_status(
+            TaskState.working,
+            message=_status_msg("Step 1/4: Fetching patient data from FHIR..."),
+        )
         patient_data = await get_patient_data(patient_id, fhir_base_url, token)
         if "error" in patient_data:
-            await updater.update_status(TaskState.failed, f"FHIR fetch failed: {patient_data['error']}")
-            await event_queue.enqueue_event(new_agent_text_message(json.dumps(patient_data, indent=2)))
+            await updater.update_status(
+                TaskState.failed,
+                message=_status_msg(f"FHIR fetch failed: {patient_data['error']}"),
+            )
             return
-
-        patient_summary = json.dumps(patient_data, indent=2)
 
         # Step 2: Run DDx and drug interactions in parallel
         await updater.update_status(
             TaskState.working,
-            "Step 2/4: Running differential diagnosis + drug interaction analysis in parallel..."
+            message=_status_msg("Step 2/4: Running differential diagnosis + drug interaction analysis in parallel..."),
         )
 
-        # Prepare drug interaction data
         medications = patient_data.get("medications", [])
         enriched_meds = await resolve_medications_to_rxcuis(medications)
         rxcuis = [m["rxcui"] for m in enriched_meds if m.get("rxcui")]
@@ -132,11 +141,17 @@ class CDSAgentExecutor(AgentExecutor):
         )
 
         # Step 3: Synthesize
-        await updater.update_status(TaskState.working, "Step 3/4: Synthesizing cross-cutting clinical assessment...")
+        await updater.update_status(
+            TaskState.working,
+            message=_status_msg("Step 3/4: Synthesizing cross-cutting clinical assessment..."),
+        )
         synthesis = run_synthesis(patient_data, ddx_results, interaction_results)
 
         # Step 4: Return results
-        await updater.update_status(TaskState.working, "Step 4/4: Preparing clinical briefing...")
+        await updater.update_status(
+            TaskState.working,
+            message=_status_msg("Step 4/4: Preparing clinical briefing..."),
+        )
 
         final_output = {
             "assessment_type": "Comprehensive Clinical Review",
@@ -160,17 +175,26 @@ class CDSAgentExecutor(AgentExecutor):
     ):
         patient_id = params["patient_id"]
 
-        await updater.update_status(TaskState.working, "Fetching patient medications...")
+        await updater.update_status(
+            TaskState.working,
+            message=_status_msg("Fetching patient medications..."),
+        )
         patient_data = await get_patient_data(patient_id, params["fhir_base_url"], token)
         if "error" in patient_data:
-            await updater.update_status(TaskState.failed, f"FHIR fetch failed: {patient_data['error']}")
+            await updater.update_status(
+                TaskState.failed,
+                message=_status_msg(f"FHIR fetch failed: {patient_data['error']}"),
+            )
             return
 
         medications = patient_data.get("medications", [])
         enriched_meds = await resolve_medications_to_rxcuis(medications)
         rxcuis = [m["rxcui"] for m in enriched_meds if m.get("rxcui")]
 
-        await updater.update_status(TaskState.working, "Checking drug interactions...")
+        await updater.update_status(
+            TaskState.working,
+            message=_status_msg("Checking drug interactions..."),
+        )
         rxnav_results = await get_interactions(rxcuis) if len(rxcuis) >= 2 else None
 
         proposed = (
@@ -189,13 +213,22 @@ class CDSAgentExecutor(AgentExecutor):
     ):
         patient_id = params["patient_id"]
 
-        await updater.update_status(TaskState.working, "Fetching patient data for differential diagnosis...")
+        await updater.update_status(
+            TaskState.working,
+            message=_status_msg("Fetching patient data for differential diagnosis..."),
+        )
         patient_data = await get_patient_data(patient_id, params["fhir_base_url"], token)
         if "error" in patient_data:
-            await updater.update_status(TaskState.failed, f"FHIR fetch failed: {patient_data['error']}")
+            await updater.update_status(
+                TaskState.failed,
+                message=_status_msg(f"FHIR fetch failed: {patient_data['error']}"),
+            )
             return
 
-        await updater.update_status(TaskState.working, "Generating differential diagnosis...")
+        await updater.update_status(
+            TaskState.working,
+            message=_status_msg("Generating differential diagnosis..."),
+        )
         result = run_ddx_reasoning(patient_data, params.get("symptoms", ""))
 
         await event_queue.enqueue_event(

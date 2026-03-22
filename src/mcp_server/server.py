@@ -41,7 +41,7 @@ async def get_patient_summary(
         access_token: SMART on FHIR bearer token (optional, from SHARP context)
     """
     if ctx:
-        ctx.info(f"Fetching FHIR data for patient {patient_id}")
+        await ctx.info(f"Fetching FHIR data for patient {patient_id}")
 
     token = access_token if access_token else None
     data = await get_patient_data(patient_id, fhir_base_url, token)
@@ -50,7 +50,7 @@ async def get_patient_summary(
         return json.dumps({"error": data["error"]}, indent=2)
 
     if ctx:
-        ctx.info(
+        await ctx.info(
             f"Found: {len(data['conditions'])} conditions, "
             f"{len(data['medications'])} medications, "
             f"{len(data['observations'])} observations, "
@@ -80,7 +80,7 @@ async def generate_differential_diagnosis(
         access_token: SMART on FHIR bearer token (optional)
     """
     if ctx:
-        ctx.info(f"Building clinical vignette for patient {patient_id}")
+        await ctx.info(f"Building clinical vignette for patient {patient_id}")
 
     token = access_token if access_token else None
     patient_data = await get_patient_data(patient_id, fhir_base_url, token)
@@ -95,7 +95,7 @@ async def generate_differential_diagnosis(
         }, indent=2)
 
     if ctx:
-        ctx.info("Running AI differential diagnosis reasoning...")
+        await ctx.info("Running AI differential diagnosis reasoning...")
 
     result = run_ddx_reasoning(patient_data, symptoms)
     return json.dumps(result, indent=2)
@@ -122,7 +122,7 @@ async def check_drug_interactions(
         access_token: SMART on FHIR bearer token (optional)
     """
     if ctx:
-        ctx.info(f"Checking drug interactions for patient {patient_id}")
+        await ctx.info(f"Checking drug interactions for patient {patient_id}")
 
     token = access_token if access_token else None
     patient_data = await get_patient_data(patient_id, fhir_base_url, token)
@@ -140,7 +140,7 @@ async def check_drug_interactions(
 
     # Resolve medications to RxCUIs
     if ctx:
-        ctx.info(f"Resolving {len(medications)} medications to RxCUI codes...")
+        await ctx.info(f"Resolving {len(medications)} medications to RxCUI codes...")
 
     enriched_meds = await resolve_medications_to_rxcuis(medications)
     rxcuis = [m["rxcui"] for m in enriched_meds if m.get("rxcui")]
@@ -149,7 +149,7 @@ async def check_drug_interactions(
     rxnav_results = None
     if len(rxcuis) >= 2:
         if ctx:
-            ctx.info(f"Checking {len(rxcuis)} RxCUIs against RxNav interaction database...")
+            await ctx.info(f"Checking {len(rxcuis)} RxCUIs against RxNav interaction database...")
         rxnav_results = await get_interactions(rxcuis)
 
     # Determine if we need AI-only fallback
@@ -161,11 +161,11 @@ async def check_drug_interactions(
 
     if not has_db_interactions and len(medications) >= 3:
         if ctx:
-            ctx.info("No database interactions found for 3+ medications. Running AI-only analysis...")
+            await ctx.info("No database interactions found for 3+ medications. Running AI-only analysis...")
 
     # Run Claude reasoning over interactions
     if ctx:
-        ctx.info("Running AI clinical significance analysis...")
+        await ctx.info("Running AI clinical significance analysis...")
 
     proposed = [m.strip() for m in proposed_medications.split(",") if m.strip()] if proposed_medications else None
     result = run_drug_interaction_reasoning(patient_data, rxnav_results, proposed)
@@ -193,7 +193,7 @@ async def synthesize_clinical_assessment(
         care_gaps_json: Optional JSON string from analyze_care_gaps
     """
     if ctx:
-        ctx.info("Synthesizing cross-cutting clinical assessment...")
+        await ctx.info("Synthesizing cross-cutting clinical assessment...")
 
     try:
         patient_summary = json.loads(patient_summary_json)
@@ -206,7 +206,7 @@ async def synthesize_clinical_assessment(
     result = run_synthesis(patient_summary, ddx_results, interaction_results, care_gaps)
 
     if ctx:
-        ctx.info("Clinical assessment synthesis complete.")
+        await ctx.info("Clinical assessment synthesis complete.")
 
     return json.dumps(result, indent=2)
 
