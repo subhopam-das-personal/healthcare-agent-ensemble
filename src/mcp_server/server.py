@@ -213,32 +213,41 @@ async def synthesize_clinical_assessment(
 
 if __name__ == "__main__":
     import uvicorn
-    from starlette.middleware.base import BaseHTTPMiddleware
-    from starlette.responses import JSONResponse
 
     port = int(os.environ.get("PORT", os.environ.get("MCP_PORT", 8000)))
     api_key = os.environ.get("MCP_API_KEY", "")
-
     asgi_app = mcp.streamable_http_app()
 
     if api_key:
-        class APIKeyMiddleware(BaseHTTPMiddleware):
-            async def dispatch(self, request, call_next):
-                # Let OAuth discovery and CORS preflight through unauthenticated
-                if request.url.path.startswith("/.well-known/") or request.method == "OPTIONS":
-                    return await call_next(request)
-                if request.headers.get("X-API-Key") != api_key:
-                    return JSONResponse(
-                        {"error": "Unauthorized"},
-                        status_code=401,
-                        headers={"Access-Control-Allow-Origin": "*"},
-                    )
-                return await call_next(request)
+        _expected = api_key.encode()
 
-        from starlette.applications import Starlette
-        from starlette.routing import Mount
-        app = Starlette(routes=[Mount("/", app=asgi_app)])
-        app.add_middleware(APIKeyMiddleware)
+        class APIKeyMiddleware:
+            """Pure ASGI middleware — no Starlette wrapping that would break FastMCP routing."""
+            def __init__(self, app):
+                self.app = app
+
+            async def __call__(self, scope, receive, send):
+                if scope["type"] != "http":
+                    await self.app(scope, receive, send)
+                    return
+                path = scope.get("path", "")
+                method = scope.get("method", "GET")
+                # Allow OAuth discovery and CORS preflight through
+                if path.startswith("/.well-known/") or method == "OPTIONS":
+                    await self.app(scope, receive, send)
+                    return
+                headers = dict(scope.get("headers", []))
+                if headers.get(b"x-api-key") != _expected:
+                    body = b'{"error":"Unauthorized"}'
+                    await send({"type": "http.response.start", "status": 401,
+                                "headers": [(b"content-type", b"application/json"),
+                                            (b"access-control-allow-origin", b"*"),
+                                            (b"content-length", str(len(body)).encode())]})
+                    await send({"type": "http.response.body", "body": body})
+                    return
+                await self.app(scope, receive, send)
+
+        app = APIKeyMiddleware(asgi_app)
         logger.info("API key authentication enabled (X-API-Key header required)")
     else:
         app = asgi_app
