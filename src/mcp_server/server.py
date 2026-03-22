@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from mcp.server.fastmcp import FastMCP, Context
+from mcp.server.transport_security import TransportSecuritySettings
 
 # Add parent to path for shared imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -20,7 +21,13 @@ from shared.rxnav_client import get_interactions, resolve_medications_to_rxcuis
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("ClinicalIntelligence")
+_allowed_hosts = os.environ.get("MCP_ALLOWED_HOSTS", "").split(",")
+_allowed_hosts = [h.strip() for h in _allowed_hosts if h.strip()]
+
+mcp = FastMCP(
+    "ClinicalIntelligence",
+    transport_security=TransportSecuritySettings(allowed_hosts=_allowed_hosts) if _allowed_hosts else None,
+)
 
 
 @mcp.tool()
