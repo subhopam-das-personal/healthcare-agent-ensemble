@@ -115,13 +115,12 @@ Rules:
 
 def run_ddx_reasoning(patient_data: dict, symptoms: str = "") -> dict:
     """Generate differential diagnosis using Claude."""
-    client = get_client()
-
     user_content = f"Patient Data:\n{json.dumps(patient_data, indent=2)}"
     if symptoms:
         user_content += f"\n\nAdditional Symptoms Reported:\n{symptoms}"
 
     try:
+        client = get_client()
         response = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=4096,
@@ -152,8 +151,6 @@ def run_drug_interaction_reasoning(
     proposed_medications: list[str] | None = None,
 ) -> dict:
     """Analyze drug interactions using Claude."""
-    client = get_client()
-
     user_content = f"Patient Data:\n{json.dumps(patient_data, indent=2)}"
     if rxnav_interactions:
         user_content += f"\n\nRxNav Database Interactions:\n{json.dumps(rxnav_interactions, indent=2)}"
@@ -163,6 +160,7 @@ def run_drug_interaction_reasoning(
         user_content += f"\n\nProposed New Medications to Check:\n{json.dumps(proposed_medications)}"
 
     try:
+        client = get_client()
         response = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=4096,
@@ -192,8 +190,6 @@ def run_synthesis(
     care_gaps: dict | None = None,
 ) -> dict:
     """Synthesize all analyses into unified clinical assessment."""
-    client = get_client()
-
     user_content = f"""Patient Summary:
 {json.dumps(patient_summary, indent=2)}
 
@@ -207,6 +203,7 @@ Drug Interaction Analysis:
         user_content += f"\n\nCare Gap Analysis:\n{json.dumps(care_gaps, indent=2)}"
 
     try:
+        client = get_client()
         response = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=4096,
