@@ -213,6 +213,29 @@ async def synthesize_clinical_assessment(
 
 if __name__ == "__main__":
     import uvicorn
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.responses import JSONResponse
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
     port = int(os.environ.get("PORT", os.environ.get("MCP_PORT", 8000)))
+    api_key = os.environ.get("MCP_API_KEY", "")
+
+    asgi_app = mcp.streamable_http_app()
+
+    if api_key:
+        class APIKeyMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request, call_next):
+                if request.headers.get("X-API-Key") != api_key:
+                    return JSONResponse({"error": "Unauthorized"}, status_code=401)
+                return await call_next(request)
+
+        app = Starlette(routes=[Mount("/", app=asgi_app)])
+        app.add_middleware(APIKeyMiddleware)
+        logger.info("API key authentication enabled")
+    else:
+        app = asgi_app
+        logger.warning("MCP_API_KEY not set — server is unauthenticated")
+
     logger.info(f"Starting Clinical Intelligence MCP Server on port {port}")
-    uvicorn.run(mcp.streamable_http_app(), host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port)
