@@ -232,12 +232,31 @@ if __name__ == "__main__":
                     return
                 path = scope.get("path", "")
                 method = scope.get("method", "GET")
-                # Allow OAuth discovery and CORS preflight through
-                if path.startswith("/.well-known/") or method == "OPTIONS":
+                # CORS preflight — always allow
+                if method == "OPTIONS":
                     await self.app(scope, receive, send)
                     return
+                # OAuth metadata discovery — return minimal response so MCP Inspector
+                # knows this server uses Bearer token auth (not a full OAuth flow)
+                if path == "/.well-known/oauth-authorization-server":
+                    base = scope.get("root_path", "")
+                    import json as _json
+                    body = _json.dumps({
+                        "issuer": base,
+                        "token_endpoint": f"{base}/token",
+                        "response_types_supported": ["token"],
+                    }).encode()
+                    await send({"type": "http.response.start", "status": 200,
+                                "headers": [(b"content-type", b"application/json"),
+                                            (b"access-control-allow-origin", b"*"),
+                                            (b"content-length", str(len(body)).encode())]})
+                    await send({"type": "http.response.body", "body": body})
+                    return
                 headers = dict(scope.get("headers", []))
-                if headers.get(b"x-api-key") != _expected:
+                # Accept X-API-Key header or Authorization: Bearer <key>
+                auth_header = headers.get(b"authorization", b"")
+                bearer_key = auth_header[len(b"Bearer "):] if auth_header.startswith(b"Bearer ") else None
+                if headers.get(b"x-api-key") != _expected and bearer_key != _expected:
                     body = b'{"error":"Unauthorized"}'
                     await send({"type": "http.response.start", "status": 401,
                                 "headers": [(b"content-type", b"application/json"),
