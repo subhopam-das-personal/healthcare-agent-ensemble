@@ -254,4 +254,4 @@ if __name__ == "__main__":
         logger.warning("MCP_API_KEY not set — server is unauthenticated")
 
     logger.info(f"Starting Clinical Intelligence MCP Server on port {port}")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port, lifespan="on")
