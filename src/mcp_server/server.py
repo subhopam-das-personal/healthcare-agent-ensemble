@@ -232,40 +232,71 @@ if __name__ == "__main__":
                     return
                 path = scope.get("path", "")
                 method = scope.get("method", "GET")
-                # CORS preflight — always allow
+
+                import json as _json
+                req_headers = dict(scope.get("headers", []))
+                host = req_headers.get(b"host", b"localhost").decode()
+                proto = req_headers.get(b"x-forwarded-proto", b"https").decode()
+                base = f"{proto}://{host}"
+                origin = req_headers.get(b"origin", b"*")
+
+                _cors = [
+                    (b"access-control-allow-origin", origin),
+                    (b"access-control-allow-methods", b"GET, POST, OPTIONS"),
+                    (b"access-control-allow-headers",
+                     b"content-type, authorization, mcp-protocol-version, x-api-key"),
+                    (b"access-control-max-age", b"3600"),
+                ]
+
+                # Handle CORS preflights ourselves — FastMCP returns 404 for
+                # /.well-known/ paths, which means no CORS headers → browser blocks GET
                 if method == "OPTIONS":
-                    await self.app(scope, receive, send)
+                    await send({"type": "http.response.start", "status": 204,
+                                "headers": _cors})
+                    await send({"type": "http.response.body", "body": b""})
                     return
-                # OAuth metadata discovery — return minimal response so MCP Inspector
-                # knows this server uses Bearer token auth (not a full OAuth flow)
+
+                # OAuth Protected Resource Metadata (RFC 9728 / MCP 2025-06-18)
+                if path == "/.well-known/oauth-protected-resource":
+                    body = _json.dumps({
+                        "resource": base,
+                        "bearer_methods_supported": ["header"],
+                        "authorization_servers": [base],
+                    }).encode()
+                    await send({"type": "http.response.start", "status": 200,
+                                "headers": _cors + [
+                                    (b"content-type", b"application/json"),
+                                    (b"content-length", str(len(body)).encode())]})
+                    await send({"type": "http.response.body", "body": body})
+                    return
+
+                # OAuth Authorization Server Metadata (RFC 8414)
                 if path == "/.well-known/oauth-authorization-server":
-                    import json as _json
-                    req_headers = dict(scope.get("headers", []))
-                    host = req_headers.get(b"host", b"localhost").decode()
-                    proto = req_headers.get(b"x-forwarded-proto", b"https").decode()
-                    base = f"{proto}://{host}"
                     body = _json.dumps({
                         "issuer": base,
                         "token_endpoint": f"{base}/token",
                         "response_types_supported": ["token"],
-                        "grant_types_supported": ["urn:ietf:params:oauth:grant-type:token-exchange"],
+                        "grant_types_supported": ["client_credentials"],
                     }).encode()
                     await send({"type": "http.response.start", "status": 200,
-                                "headers": [(b"content-type", b"application/json"),
-                                            (b"access-control-allow-origin", b"*"),
-                                            (b"content-length", str(len(body)).encode())]})
+                                "headers": _cors + [
+                                    (b"content-type", b"application/json"),
+                                    (b"content-length", str(len(body)).encode())]})
                     await send({"type": "http.response.body", "body": body})
                     return
-                headers = dict(scope.get("headers", []))
+
+                headers = req_headers
                 # Accept X-API-Key header or Authorization: Bearer <key>
                 auth_header = headers.get(b"authorization", b"")
                 bearer_key = auth_header[len(b"Bearer "):] if auth_header.startswith(b"Bearer ") else None
                 if headers.get(b"x-api-key") != _expected and bearer_key != _expected:
                     body = b'{"error":"Unauthorized"}'
                     await send({"type": "http.response.start", "status": 401,
-                                "headers": [(b"content-type", b"application/json"),
-                                            (b"access-control-allow-origin", b"*"),
-                                            (b"content-length", str(len(body)).encode())]})
+                                "headers": [
+                                    (b"content-type", b"application/json"),
+                                    (b"access-control-allow-origin", b"*"),
+                                    (b"www-authenticate", b'Bearer realm="ClinicalIntelligence"'),
+                                    (b"content-length", str(len(body)).encode())]})
                     await send({"type": "http.response.body", "body": body})
                     return
                 await self.app(scope, receive, send)
