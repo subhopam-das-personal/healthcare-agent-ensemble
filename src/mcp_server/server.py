@@ -212,6 +212,7 @@ async def synthesize_clinical_assessment(
 
 
 if __name__ == "__main__":
+    import uvicorn
     port = int(os.environ.get("PORT", os.environ.get("MCP_PORT", 8000)))
     logger.info(f"Starting Clinical Intelligence MCP Server on port {port}")
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
+    uvicorn.run(mcp.streamable_http_app(), host="0.0.0.0", port=port)
