@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
@@ -23,6 +24,40 @@ from shared.mcp_client import (
 
 logger = logging.getLogger(__name__)
 
+# UUID pattern for FHIR patient IDs
+_UUID_RE = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
+
+# Skill keywords for natural language routing
+_SKILL_KEYWORDS = {
+    "drug": "quick-drug-check",
+    "interaction": "quick-drug-check",
+    "medication": "quick-drug-check",
+    "diagnosis": "differential-diagnosis",
+    "differential": "differential-diagnosis",
+    "ddx": "differential-diagnosis",
+}
+
+
+def _extract_skill_from_text(text: str) -> str:
+    lower = text.lower()
+    for keyword, skill in _SKILL_KEYWORDS.items():
+        if keyword in lower:
+            return skill
+    return "comprehensive-clinical-review"
+
+
+def _extract_fhir_url_from_text(text: str) -> str:
+    """Extract FHIR base URL if explicitly mentioned in the text."""
+    match = re.search(r"https?://[^\s/]+(?:/[^\s]*)?/(?=Patient|Observation|Condition)", text)
+    if match:
+        # Return just the base up to the resource type
+        url = match.group(0).rstrip("/")
+        return url
+    return DEFAULT_FHIR_BASE_URL
+
 
 def _status_msg(text: str):
     return new_agent_text_message(text)
@@ -36,6 +71,7 @@ def _parse_user_input(context: RequestContext) -> dict:
         if hasattr(inner, "text"):
             text += inner.text
 
+    # 1. Try JSON first (structured input from API callers)
     try:
         parsed = json.loads(text)
         return {
@@ -49,11 +85,40 @@ def _parse_user_input(context: RequestContext) -> dict:
     except (json.JSONDecodeError, TypeError):
         pass
 
+    # 2. Extract UUID patient ID from natural language (e.g. Prompt Opinion platform input)
+    uuids = _UUID_RE.findall(text)
+    if uuids:
+        patient_id = uuids[0]
+        logger.info(f"[_parse_user_input] Extracted patient_id from natural language: {patient_id!r}")
+        return {
+            "patient_id": patient_id,
+            "fhir_base_url": _extract_fhir_url_from_text(text),
+            "symptoms": "",
+            "skill": _extract_skill_from_text(text),
+            "proposed_medications": "",
+            "access_token": "",
+        }
+
+    # 3. Last resort: treat as bare patient ID only if it looks like one (no spaces)
+    stripped = text.strip()
+    if stripped and " " not in stripped and len(stripped) < 128:
+        logger.info(f"[_parse_user_input] Using bare text as patient_id: {stripped!r}")
+        return {
+            "patient_id": stripped,
+            "fhir_base_url": DEFAULT_FHIR_BASE_URL,
+            "symptoms": "",
+            "skill": "comprehensive-clinical-review",
+            "proposed_medications": "",
+            "access_token": "",
+        }
+
+    # 4. Cannot extract a patient ID — return empty so the executor fails gracefully
+    logger.warning(f"[_parse_user_input] Could not extract patient_id from: {text[:100]!r}")
     return {
-        "patient_id": text.strip(),
+        "patient_id": "",
         "fhir_base_url": DEFAULT_FHIR_BASE_URL,
-        "symptoms": "",
-        "skill": "comprehensive-clinical-review",
+        "symptoms": text.strip(),
+        "skill": _extract_skill_from_text(text),
         "proposed_medications": "",
         "access_token": "",
     }
