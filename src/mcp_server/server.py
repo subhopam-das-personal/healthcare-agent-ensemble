@@ -80,6 +80,7 @@ async def get_patient_summary(
     patient_id: str,
     fhir_base_url: str = DEFAULT_FHIR_BASE_URL,
     access_token: str = "",
+    patient_json: str = "",
     ctx: Context = None,
 ) -> str:
     """Fetch comprehensive patient summary from FHIR server.
@@ -91,15 +92,25 @@ async def get_patient_summary(
         patient_id: FHIR Patient resource ID
         fhir_base_url: FHIR server base URL (default: SMART Health IT sandbox)
         access_token: SMART on FHIR bearer token (optional, from SHARP context)
+        patient_json: Optional pre-fetched patient data JSON (skips FHIR fetch if provided)
     """
+    logger.info(f"[get_patient_summary] patient_id={patient_id!r} fhir_base_url={fhir_base_url!r} has_patient_json={bool(patient_json)}")
     try:
         if ctx:
             await ctx.info(f"Fetching FHIR data for patient {patient_id}")
     except Exception:
         pass
 
-    token = access_token if access_token else None
-    data = await get_patient_data(patient_id, fhir_base_url, token)
+    if patient_json:
+        try:
+            data = json.loads(patient_json)
+            logger.info(f"[get_patient_summary] Using pre-fetched patient_json ({len(patient_json)} bytes)")
+        except json.JSONDecodeError as e:
+            logger.error(f"[get_patient_summary] Invalid patient_json: {e}")
+            return json.dumps({"error": f"Invalid patient_json: {str(e)}"}, indent=2)
+    else:
+        token = access_token if access_token else None
+        data = await get_patient_data(patient_id, fhir_base_url, token)
 
     if "error" in data:
         logger.error(f"[get_patient_summary] FHIR error for {patient_id}: {data['error']}")
@@ -130,6 +141,7 @@ async def generate_differential_diagnosis(
     fhir_base_url: str = DEFAULT_FHIR_BASE_URL,
     symptoms: str = "",
     access_token: str = "",
+    patient_json: str = "",
     ctx: Context = None,
 ) -> str:
     """Generate AI-powered differential diagnosis from FHIR patient data.
@@ -142,15 +154,25 @@ async def generate_differential_diagnosis(
         fhir_base_url: FHIR server base URL
         symptoms: Optional free-text symptom description to supplement FHIR data
         access_token: SMART on FHIR bearer token (optional)
+        patient_json: Optional pre-fetched patient data JSON (skips FHIR fetch if provided)
     """
+    logger.info(f"[generate_differential_diagnosis] patient_id={patient_id!r} fhir_base_url={fhir_base_url!r} has_patient_json={bool(patient_json)}")
     try:
         if ctx:
             await ctx.info(f"Building clinical vignette for patient {patient_id}")
     except Exception:
         pass
 
-    token = access_token if access_token else None
-    patient_data = await get_patient_data(patient_id, fhir_base_url, token)
+    if patient_json:
+        try:
+            patient_data = json.loads(patient_json)
+            logger.info(f"[generate_differential_diagnosis] Using pre-fetched patient_json ({len(patient_json)} bytes)")
+        except json.JSONDecodeError as e:
+            logger.error(f"[generate_differential_diagnosis] Invalid patient_json: {e}")
+            return json.dumps({"error": f"Invalid patient_json: {str(e)}"}, indent=2)
+    else:
+        token = access_token if access_token else None
+        patient_data = await get_patient_data(patient_id, fhir_base_url, token)
 
     if "error" in patient_data:
         logger.error(f"[generate_differential_diagnosis] FHIR error: {patient_data['error']}")
@@ -182,6 +204,7 @@ async def check_drug_interactions(
     fhir_base_url: str = DEFAULT_FHIR_BASE_URL,
     proposed_medications: str = "",
     access_token: str = "",
+    patient_json: str = "",
     ctx: Context = None,
 ) -> str:
     """Check drug-drug interactions for a patient's medication list with AI clinical interpretation.
@@ -195,15 +218,25 @@ async def check_drug_interactions(
         fhir_base_url: FHIR server base URL
         proposed_medications: Optional comma-separated new medications to check against existing regimen
         access_token: SMART on FHIR bearer token (optional)
+        patient_json: Optional pre-fetched patient data JSON (skips FHIR fetch if provided)
     """
+    logger.info(f"[check_drug_interactions] patient_id={patient_id!r} fhir_base_url={fhir_base_url!r} has_patient_json={bool(patient_json)}")
     try:
         if ctx:
             await ctx.info(f"Checking drug interactions for patient {patient_id}")
     except Exception:
         pass
 
-    token = access_token if access_token else None
-    patient_data = await get_patient_data(patient_id, fhir_base_url, token)
+    if patient_json:
+        try:
+            patient_data = json.loads(patient_json)
+            logger.info(f"[check_drug_interactions] Using pre-fetched patient_json ({len(patient_json)} bytes)")
+        except json.JSONDecodeError as e:
+            logger.error(f"[check_drug_interactions] Invalid patient_json: {e}")
+            return json.dumps({"error": f"Invalid patient_json: {str(e)}"}, indent=2)
+    else:
+        token = access_token if access_token else None
+        patient_data = await get_patient_data(patient_id, fhir_base_url, token)
 
     if "error" in patient_data:
         logger.error(f"[check_drug_interactions] FHIR error: {patient_data['error']}")

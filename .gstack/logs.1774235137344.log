@@ -1,0 +1,54 @@
+2026-03-23T02:53:57.546554138Z [inf]  Starting Container
+2026-03-23T02:53:57.958059134Z [err]  INFO:__main__:API key authentication enabled (X-API-Key header required)
+2026-03-23T02:53:57.958083747Z [err]  INFO:__main__:Starting Clinical Intelligence MCP Server on port 8080
+2026-03-23T02:53:57.958088465Z [err]  INFO:     Started server process [1]
+2026-03-23T02:53:57.958093118Z [err]  INFO:     Waiting for application startup.
+2026-03-23T02:53:57.958098327Z [err]  INFO:mcp.server.streamable_http_manager:StreamableHTTP session manager started
+2026-03-23T02:53:57.958103810Z [err]  INFO:     Application startup complete.
+2026-03-23T02:53:57.958108799Z [err]  INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2026-03-23T03:01:49.112504846Z [err]  INFO:mcp.server.streamable_http_manager:Created new transport with session ID: 87090064f6804177949959af785a1207
+2026-03-23T03:01:49.112512079Z [inf]  INFO:     100.64.0.2:32448 - "POST /mcp HTTP/1.1" 200 OK
+2026-03-23T03:01:49.112516883Z [inf]  INFO:     100.64.0.2:32448 - "GET /mcp HTTP/1.1" 200 OK
+2026-03-23T03:01:49.112521569Z [inf]  INFO:     100.64.0.3:29106 - "POST /mcp HTTP/1.1" 202 Accepted
+2026-03-23T03:01:49.112526032Z [inf]  INFO:     100.64.0.3:29106 - "POST /mcp HTTP/1.1" 200 OK
+2026-03-23T03:01:49.112531406Z [err]  INFO:mcp.server.lowlevel.server:Processing request of type ListToolsRequest
+2026-03-23T03:01:49.112536717Z [err]  INFO:mcp.server.streamable_http:Terminating session: 87090064f6804177949959af785a1207
+2026-03-23T03:01:49.112542702Z [inf]  INFO:     100.64.0.3:29106 - "DELETE /mcp HTTP/1.1" 200 OK
+2026-03-23T03:03:49.186592053Z [err]  INFO:mcp.server.lowlevel.server:Processing request of type ListToolsRequest
+2026-03-23T03:03:49.186602122Z [err]  INFO:mcp.server.streamable_http:Terminating session: 73a195921cbc4ab7befd722d4d275e14
+2026-03-23T03:03:49.186608283Z [inf]  INFO:     100.64.0.4:31504 - "DELETE /mcp HTTP/1.1" 200 OK
+2026-03-23T03:03:49.186649129Z [err]  INFO:mcp.server.streamable_http_manager:Created new transport with session ID: 73a195921cbc4ab7befd722d4d275e14
+2026-03-23T03:03:49.186653002Z [inf]  INFO:     100.64.0.2:47868 - "POST /mcp HTTP/1.1" 200 OK
+2026-03-23T03:03:49.186657742Z [inf]  INFO:     100.64.0.2:47868 - "GET /mcp HTTP/1.1" 200 OK
+2026-03-23T03:03:49.186662132Z [inf]  INFO:     100.64.0.4:31504 - "POST /mcp HTTP/1.1" 202 Accepted
+2026-03-23T03:03:49.186666425Z [inf]  INFO:     100.64.0.4:31504 - "POST /mcp HTTP/1.1" 200 OK
+2026-03-23T03:04:38.945418262Z [err]  INFO:mcp.server.streamable_http_manager:Created new transport with session ID: b0d6524d2e814b6dbbfb231d51fd5e8b
+2026-03-23T03:04:38.945426044Z [inf]  INFO:     100.64.0.2:24570 - "POST /mcp HTTP/1.1" 200 OK
+2026-03-23T03:04:38.945501767Z [err]  INFO:__main__:[check_drug_interactions] Running AI reasoning (db_interactions=[])
+2026-03-23T03:04:38.945547454Z [inf]  INFO:     100.64.0.2:24570 - "GET /mcp HTTP/1.1" 200 OK
+2026-03-23T03:04:38.945557200Z [inf]  INFO:     100.64.0.2:24582 - "POST /mcp HTTP/1.1" 202 Accepted
+2026-03-23T03:04:38.945562003Z [inf]  INFO:     100.64.0.2:24582 - "POST /mcp HTTP/1.1" 200 OK
+2026-03-23T03:04:38.945566586Z [err]  INFO:mcp.server.lowlevel.server:Processing request of type ListToolsRequest
+2026-03-23T03:04:38.945571022Z [inf]  INFO:     100.64.0.2:24582 - "POST /mcp HTTP/1.1" 200 OK
+2026-03-23T03:04:38.945577072Z [err]  INFO:mcp.server.lowlevel.server:Processing request of type CallToolRequest
+2026-03-23T03:04:38.945583198Z [err]  INFO:httpx:HTTP Request: GET https://r4.smarthealthit.org/Patient/fa064acf-b7f1-4279-83d3-7a94686da7ba "HTTP/1.1 200 OK"
+2026-03-23T03:04:38.945587870Z [err]  INFO:httpx:HTTP Request: GET https://r4.smarthealthit.org/AllergyIntolerance?patient=fa064acf-b7f1-4279-83d3-7a94686da7ba&_count=100 "HTTP/1.1 200 OK"
+2026-03-23T03:04:38.945592378Z [err]  INFO:httpx:HTTP Request: GET https://r4.smarthealthit.org/MedicationRequest?patient=fa064acf-b7f1-4279-83d3-7a94686da7ba&_count=100 "HTTP/1.1 200 OK"
+2026-03-23T03:04:38.945597075Z [err]  INFO:httpx:HTTP Request: GET https://r4.smarthealthit.org/Condition?patient=fa064acf-b7f1-4279-83d3-7a94686da7ba&_count=100 "HTTP/1.1 200 OK"
+2026-03-23T03:04:38.945603215Z [err]  INFO:httpx:HTTP Request: GET https://r4.smarthealthit.org/Observation?patient=fa064acf-b7f1-4279-83d3-7a94686da7ba&_count=100&_sort=-date "HTTP/1.1 200 OK"
+2026-03-23T03:04:38.945607731Z [err]  INFO:__main__:[check_drug_interactions] 9 medications found for fa064acf-b7f1-4279-83d3-7a94686da7ba
+2026-03-23T03:04:38.945612164Z [err]  INFO:__main__:[check_drug_interactions] Resolved 9 RxCUIs
+2026-03-23T03:04:58.941439047Z [err]  INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-03-23T03:04:58.941444175Z [err]  INFO:__main__:[check_drug_interactions] Returning 3619 bytes
+2026-03-23T03:04:58.941449799Z [inf]  INFO:     100.64.0.2:24582 - "DELETE /mcp HTTP/1.1" 200 OK
+2026-03-23T03:04:58.941454355Z [err]  INFO:mcp.server.streamable_http:Terminating session: b0d6524d2e814b6dbbfb231d51fd5e8b
+2026-03-23T03:04:58.941459065Z [err]  INFO:mcp.server.streamable_http_manager:Created new transport with session ID: f56f7efc8d4c4ca3919b72aad46c3918
+2026-03-23T03:04:58.941464264Z [inf]  INFO:     100.64.0.5:62114 - "POST /mcp HTTP/1.1" 200 OK
+2026-03-23T03:04:58.941468877Z [inf]  INFO:     100.64.0.5:62114 - "GET /mcp HTTP/1.1" 200 OK
+2026-03-23T03:04:58.941476695Z [inf]  INFO:     100.64.0.6:23780 - "POST /mcp HTTP/1.1" 202 Accepted
+2026-03-23T03:04:58.941482147Z [inf]  INFO:     100.64.0.6:23780 - "POST /mcp HTTP/1.1" 200 OK
+2026-03-23T03:04:58.941486783Z [err]  INFO:mcp.server.lowlevel.server:Processing request of type ListResourcesRequest
+2026-03-23T03:04:58.941491389Z [inf]  INFO:     100.64.0.6:23780 - "POST /mcp HTTP/1.1" 200 OK
+2026-03-23T03:04:58.941496093Z [err]  INFO:mcp.server.lowlevel.server:Processing request of type ReadResourceRequest
+2026-03-23T03:04:58.941500646Z [inf]  INFO:     100.64.0.6:23780 - "DELETE /mcp HTTP/1.1" 200 OK
+2026-03-23T03:04:58.941505266Z [err]  INFO:mcp.server.streamable_http:Terminating session: f56f7efc8d4c4ca3919b72aad46c3918
