@@ -29,8 +29,53 @@ mcp = FastMCP(
     transport_security=TransportSecuritySettings(allowed_hosts=_allowed_hosts) if _allowed_hosts else None,
 )
 
+_UI_RESOURCE_URI = "ui://clinical-intelligence/results"
 
-@mcp.tool()
+_UI_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clinical Intelligence</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #f8fafc; color: #1e293b; }
+  pre { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; overflow-x: auto; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+  h2 { font-size: 16px; font-weight: 600; margin: 0 0 12px; color: #0f172a; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; background: #dbeafe; color: #1d4ed8; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<span class="badge">Clinical Intelligence</span>
+<h2>Tool Result</h2>
+<pre id="output">Loading...</pre>
+<script>
+window.addEventListener("message", function(e) {
+  var d = e.data;
+  if (d && d.method === "tools/result" && d.params && d.params.content) {
+    var text = d.params.content.map(function(c) { return c.text || ""; }).join("\\n");
+    try { text = JSON.stringify(JSON.parse(text), null, 2); } catch(_) {}
+    document.getElementById("output").textContent = text;
+  }
+});
+</script>
+</body>
+</html>"""
+
+
+@mcp.resource(
+    _UI_RESOURCE_URI,
+    name="clinical_results",
+    description="Renders clinical tool results",
+    mime_type="text/html;profile=mcp-app",
+)
+def clinical_ui_resource() -> str:
+    return _UI_HTML
+
+
+_UI_META = {"ui": {"resourceUri": _UI_RESOURCE_URI}}
+
+
+@mcp.tool(meta=_UI_META)
 async def get_patient_summary(
     patient_id: str,
     fhir_base_url: str = DEFAULT_FHIR_BASE_URL,
@@ -67,7 +112,7 @@ async def get_patient_summary(
     return json.dumps(data, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(meta=_UI_META)
 async def generate_differential_diagnosis(
     patient_id: str,
     fhir_base_url: str = DEFAULT_FHIR_BASE_URL,
@@ -108,7 +153,7 @@ async def generate_differential_diagnosis(
     return json.dumps(result, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(meta=_UI_META)
 async def check_drug_interactions(
     patient_id: str,
     fhir_base_url: str = DEFAULT_FHIR_BASE_URL,
@@ -179,7 +224,7 @@ async def check_drug_interactions(
     return json.dumps(result, indent=2)
 
 
-@mcp.tool()
+@mcp.tool(meta=_UI_META)
 async def synthesize_clinical_assessment(
     patient_summary_json: str,
     ddx_results_json: str,
