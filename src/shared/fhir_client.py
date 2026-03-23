@@ -3,6 +3,7 @@
 import httpx
 import json
 import logging
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -10,6 +11,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_FHIR_BASE_URL = "https://r4.smarthealthit.org"
 FHIR_TIMEOUT = 10.0
 FHIR_MAX_COUNT = 100
+
+# In-memory patient cache: key=(patient_id, fhir_base_url), value=(data, expires_at)
+# TTL of 5 minutes — prevents redundant FHIR fetches when an LLM agent calls
+# the same tool multiple times in one session.
+_PATIENT_CACHE: dict[tuple, tuple] = {}
+_CACHE_TTL = 300  # seconds
 
 
 async def _fhir_get(
@@ -127,7 +134,16 @@ async def get_patient_data(
     fhir_base_url: str = DEFAULT_FHIR_BASE_URL,
     access_token: Optional[str] = None,
 ) -> dict:
-    """Fetch comprehensive patient data from FHIR server."""
+    """Fetch comprehensive patient data from FHIR server (cached 5 min)."""
+    cache_key = (patient_id, fhir_base_url.rstrip("/"))
+    cached = _PATIENT_CACHE.get(cache_key)
+    if cached:
+        data, expires_at = cached
+        if time.monotonic() < expires_at:
+            logger.info(f"[get_patient_data] Cache hit for patient {patient_id}")
+            return data
+        del _PATIENT_CACHE[cache_key]
+
     base = fhir_base_url.rstrip("/")
     warnings = []
 
@@ -173,4 +189,5 @@ async def get_patient_data(
     if warnings:
         result["warnings"] = warnings
 
+    _PATIENT_CACHE[cache_key] = (result, time.monotonic() + _CACHE_TTL)
     return result
