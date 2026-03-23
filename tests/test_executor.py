@@ -147,6 +147,18 @@ async def test_execute_fails_when_no_patient_id():
            call_args.args[0] == TaskState.failed
 
 
+def _mock_mcp_session():
+    """Return a context manager mock that yields a fake MCP session."""
+    from contextlib import asynccontextmanager
+    session = AsyncMock()
+
+    @asynccontextmanager
+    async def _ctx():
+        yield session
+
+    return _ctx()
+
+
 @pytest.mark.asyncio
 async def test_execute_routes_to_quick_drug_check():
     """skill=quick-drug-check should call _quick_drug_check."""
@@ -161,6 +173,7 @@ async def test_execute_routes_to_quick_drug_check():
 
     with patch("a2a_agent.executor.new_task", return_value=task_mock), \
          patch("a2a_agent.executor.TaskUpdater") as mock_updater_cls, \
+         patch("a2a_agent.executor.make_mcp_session", return_value=_mock_mcp_session()), \
          patch.object(executor, "_quick_drug_check", new_callable=AsyncMock) as mock_drug:
         mock_updater = AsyncMock()
         mock_updater_cls.return_value = mock_updater
@@ -183,6 +196,7 @@ async def test_execute_routes_to_differential_diagnosis():
 
     with patch("a2a_agent.executor.new_task", return_value=task_mock), \
          patch("a2a_agent.executor.TaskUpdater") as mock_updater_cls, \
+         patch("a2a_agent.executor.make_mcp_session", return_value=_mock_mcp_session()), \
          patch.object(executor, "_differential_diagnosis", new_callable=AsyncMock) as mock_ddx:
         mock_updater = AsyncMock()
         mock_updater_cls.return_value = mock_updater
@@ -205,6 +219,7 @@ async def test_execute_routes_to_comprehensive_review_by_default():
 
     with patch("a2a_agent.executor.new_task", return_value=task_mock), \
          patch("a2a_agent.executor.TaskUpdater") as mock_updater_cls, \
+         patch("a2a_agent.executor.make_mcp_session", return_value=_mock_mcp_session()), \
          patch.object(executor, "_comprehensive_review", new_callable=AsyncMock) as mock_review:
         mock_updater = AsyncMock()
         mock_updater_cls.return_value = mock_updater
@@ -227,6 +242,7 @@ async def test_execute_handles_unexpected_exception():
 
     with patch("a2a_agent.executor.new_task", return_value=task_mock), \
          patch("a2a_agent.executor.TaskUpdater") as mock_updater_cls, \
+         patch("a2a_agent.executor.make_mcp_session", return_value=_mock_mcp_session()), \
          patch.object(executor, "_comprehensive_review", new_callable=AsyncMock,
                       side_effect=RuntimeError("DB crashed")):
         mock_updater = AsyncMock()

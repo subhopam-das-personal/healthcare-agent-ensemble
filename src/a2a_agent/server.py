@@ -19,8 +19,9 @@ from a2a_agent.executor import CDSAgentExecutor
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-A2A_PORT = int(os.environ.get("A2A_PORT", 9999))
+A2A_PORT = int(os.environ.get("PORT", os.environ.get("A2A_PORT", 9999)))
 A2A_HOST = os.environ.get("A2A_HOST", "0.0.0.0")
+A2A_PUBLIC_URL = os.environ.get("A2A_PUBLIC_URL", f"http://localhost:{A2A_PORT}")
 
 agent_card = AgentCard(
     name="Clinical Decision Support Orchestrator",
@@ -30,7 +31,7 @@ agent_card = AgentCard(
         "FHIR patient data. Combines multiple clinical analyses into unified "
         "briefings that identify cross-cutting insights."
     ),
-    url=f"http://localhost:{A2A_PORT}/",
+    url=f"{A2A_PUBLIC_URL}/",
     version="1.0.0",
     provider=AgentProvider(
         organization="HealthcareAgentEnsemble",
