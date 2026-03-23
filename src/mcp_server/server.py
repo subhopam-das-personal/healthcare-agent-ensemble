@@ -102,20 +102,26 @@ async def get_patient_summary(
     data = await get_patient_data(patient_id, fhir_base_url, token)
 
     if "error" in data:
+        logger.error(f"[get_patient_summary] FHIR error for {patient_id}: {data['error']}")
         return json.dumps({"error": data["error"]}, indent=2)
+
+    summary = (
+        f"Found: {len(data['conditions'])} conditions, "
+        f"{len(data['medications'])} medications, "
+        f"{len(data['observations'])} observations, "
+        f"{len(data['allergies'])} allergies"
+    )
+    logger.info(f"[get_patient_summary] {summary}")
 
     try:
         if ctx:
-            await ctx.info(
-                f"Found: {len(data['conditions'])} conditions, "
-                f"{len(data['medications'])} medications, "
-                f"{len(data['observations'])} observations, "
-                f"{len(data['allergies'])} allergies"
-            )
+            await ctx.info(summary)
     except Exception:
         pass
 
-    return json.dumps(data, indent=2)
+    result = json.dumps(data, indent=2)
+    logger.info(f"[get_patient_summary] Returning {len(result)} bytes")
+    return result
 
 
 @mcp.tool(meta=_UI_META)
@@ -147,14 +153,17 @@ async def generate_differential_diagnosis(
     patient_data = await get_patient_data(patient_id, fhir_base_url, token)
 
     if "error" in patient_data:
+        logger.error(f"[generate_differential_diagnosis] FHIR error: {patient_data['error']}")
         return json.dumps({"error": patient_data["error"]}, indent=2)
 
     if not patient_data["conditions"] and not symptoms:
+        logger.warning(f"[generate_differential_diagnosis] No conditions and no symptoms for {patient_id}")
         return json.dumps({
             "error": "No conditions found and no symptoms provided. Cannot generate differential.",
             "suggestion": "Provide symptoms parameter with clinical presentation details."
         }, indent=2)
 
+    logger.info(f"[generate_differential_diagnosis] Running DDx reasoning for {patient_id}")
     try:
         if ctx:
             await ctx.info("Running AI differential diagnosis reasoning...")
@@ -162,7 +171,9 @@ async def generate_differential_diagnosis(
         pass
 
     result = run_ddx_reasoning(patient_data, symptoms)
-    return json.dumps(result, indent=2)
+    out = json.dumps(result, indent=2)
+    logger.info(f"[generate_differential_diagnosis] Returning {len(out)} bytes")
+    return out
 
 
 @mcp.tool(meta=_UI_META)
@@ -195,9 +206,11 @@ async def check_drug_interactions(
     patient_data = await get_patient_data(patient_id, fhir_base_url, token)
 
     if "error" in patient_data:
+        logger.error(f"[check_drug_interactions] FHIR error: {patient_data['error']}")
         return json.dumps({"error": patient_data["error"]}, indent=2)
 
     medications = patient_data.get("medications", [])
+    logger.info(f"[check_drug_interactions] {len(medications)} medications found for {patient_id}")
     if not medications:
         return json.dumps({
             "interactions": [],
@@ -214,6 +227,7 @@ async def check_drug_interactions(
 
     enriched_meds = await resolve_medications_to_rxcuis(medications)
     rxcuis = [m["rxcui"] for m in enriched_meds if m.get("rxcui")]
+    logger.info(f"[check_drug_interactions] Resolved {len(rxcuis)} RxCUIs")
 
     # Check RxNav interactions
     rxnav_results = None
@@ -236,16 +250,17 @@ async def check_drug_interactions(
         if not has_db_interactions and len(medications) >= 3:
             if ctx:
                 await ctx.info("No database interactions found for 3+ medications. Running AI-only analysis...")
-
-        # Run Claude reasoning over interactions
         if ctx:
             await ctx.info("Running AI clinical significance analysis...")
     except Exception:
         pass
 
+    logger.info(f"[check_drug_interactions] Running AI reasoning (db_interactions={has_db_interactions})")
     proposed = [m.strip() for m in proposed_medications.split(",") if m.strip()] if proposed_medications else None
     result = run_drug_interaction_reasoning(patient_data, rxnav_results, proposed)
-    return json.dumps(result, indent=2)
+    out = json.dumps(result, indent=2)
+    logger.info(f"[check_drug_interactions] Returning {len(out)} bytes")
+    return out
 
 
 @mcp.tool(meta=_UI_META)
@@ -280,9 +295,13 @@ async def synthesize_clinical_assessment(
         interaction_results = json.loads(interaction_results_json)
         care_gaps = json.loads(care_gaps_json) if care_gaps_json else None
     except json.JSONDecodeError as e:
+        logger.error(f"[synthesize_clinical_assessment] JSON parse error: {e}")
         return json.dumps({"error": f"Invalid JSON input: {str(e)}"}, indent=2)
 
+    logger.info("[synthesize_clinical_assessment] Running synthesis")
     result = run_synthesis(patient_summary, ddx_results, interaction_results, care_gaps)
+    out = json.dumps(result, indent=2)
+    logger.info(f"[synthesize_clinical_assessment] Returning {len(out)} bytes")
 
     try:
         if ctx:
@@ -290,7 +309,7 @@ async def synthesize_clinical_assessment(
     except Exception:
         pass
 
-    return json.dumps(result, indent=2)
+    return out
 
 
 if __name__ == "__main__":
