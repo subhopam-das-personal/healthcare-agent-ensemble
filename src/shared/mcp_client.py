@@ -1,5 +1,6 @@
 """MCP client — calls the deployed MCP server via streamable-http transport."""
 
+import asyncio
 import json
 import logging
 import os
@@ -102,15 +103,30 @@ def make_mcp_session():
 
 class _MCPSessionContext:
     async def __aenter__(self) -> ClientSession:
-        headers = {"Authorization": f"Bearer {_MCP_API_KEY}"} if _MCP_API_KEY else {}
-        http_client = httpx.AsyncClient(timeout=_TIMEOUT, headers=headers)
-        self._http_client = http_client
-        self._transport = streamable_http_client(MCP_SERVER_URL, http_client=http_client)
-        read, write, _ = await self._transport.__aenter__()
-        self._session = ClientSession(read, write)
-        await self._session.__aenter__()
-        await self._session.initialize()
-        return self._session
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            if attempt:
+                await asyncio.sleep(2 ** attempt)  # 2s, 4s back-off
+            try:
+                headers = {"Authorization": f"Bearer {_MCP_API_KEY}"} if _MCP_API_KEY else {}
+                http_client = httpx.AsyncClient(timeout=_TIMEOUT, headers=headers)
+                transport = streamable_http_client(MCP_SERVER_URL, http_client=http_client)
+                read, write, _ = await transport.__aenter__()
+                session = ClientSession(read, write)
+                await session.__aenter__()
+                await session.initialize()
+                self._http_client = http_client
+                self._transport = transport
+                self._session = session
+                return session
+            except Exception as exc:
+                logger.warning(f"[mcp_client] Session init attempt {attempt + 1} failed: {exc}")
+                last_exc = exc
+                try:
+                    await http_client.aclose()
+                except Exception:
+                    pass
+        raise last_exc  # type: ignore[misc]
 
     async def __aexit__(self, *args):
         await self._session.__aexit__(*args)

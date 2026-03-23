@@ -1,5 +1,6 @@
 """Clinical Intelligence MCP Server — 4 core tools + 1 stretch goal."""
 
+import asyncio
 import json
 import logging
 import os
@@ -192,7 +193,7 @@ async def generate_differential_diagnosis(
     except Exception:
         pass
 
-    result = run_ddx_reasoning(patient_data, symptoms)
+    result = await asyncio.to_thread(run_ddx_reasoning, patient_data, symptoms)
     out = json.dumps(result, indent=2)
     logger.info(f"[generate_differential_diagnosis] Returning {len(out)} bytes")
     return out
@@ -290,7 +291,7 @@ async def check_drug_interactions(
 
     logger.info(f"[check_drug_interactions] Running AI reasoning (db_interactions={has_db_interactions})")
     proposed = [m.strip() for m in proposed_medications.split(",") if m.strip()] if proposed_medications else None
-    result = run_drug_interaction_reasoning(patient_data, rxnav_results, proposed)
+    result = await asyncio.to_thread(run_drug_interaction_reasoning, patient_data, rxnav_results, proposed)
     out = json.dumps(result, indent=2)
     logger.info(f"[check_drug_interactions] Returning {len(out)} bytes")
     return out
@@ -332,7 +333,7 @@ async def synthesize_clinical_assessment(
         return json.dumps({"error": f"Invalid JSON input: {str(e)}"}, indent=2)
 
     logger.info("[synthesize_clinical_assessment] Running synthesis")
-    result = run_synthesis(patient_summary, ddx_results, interaction_results, care_gaps)
+    result = await asyncio.to_thread(run_synthesis, patient_summary, ddx_results, interaction_results, care_gaps)
     out = json.dumps(result, indent=2)
     logger.info(f"[synthesize_clinical_assessment] Returning {len(out)} bytes")
 

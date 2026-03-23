@@ -3,15 +3,22 @@
 import logging
 import os
 import sys
+import uuid
+from collections.abc import AsyncGenerator
+from typing import Union
 
 from dotenv import load_dotenv
 load_dotenv()
 
 import uvicorn
 from a2a.server.apps import A2AStarletteApplication
+from a2a.server.context import ServerCallContext
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
-from a2a.types import AgentCard, AgentSkill, AgentCapabilities, AgentProvider
+from a2a.types import (
+    AgentCard, AgentSkill, AgentCapabilities, AgentProvider,
+    Message, MessageSendParams, Task, TaskArtifactUpdateEvent, TaskStatusUpdateEvent,
+)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from a2a_agent.executor import CDSAgentExecutor
@@ -31,7 +38,7 @@ agent_card = AgentCard(
         "FHIR patient data. Combines multiple clinical analyses into unified "
         "briefings that identify cross-cutting insights."
     ),
-    url=f"{A2A_PUBLIC_URL}/",
+    url=A2A_PUBLIC_URL.rstrip("/"),
     version="1.0.0",
     provider=AgentProvider(
         organization="HealthcareAgentEnsemble",
@@ -85,8 +92,29 @@ agent_card = AgentCard(
 )
 
 
+class RobustRequestHandler(DefaultRequestHandler):
+    """DefaultRequestHandler with compatibility fixes for clients (e.g. PromptOpinion)
+    that omit task_id in their A2A messages."""
+
+    def _ensure_task_id(self, params: MessageSendParams) -> None:
+        if not params.message.task_id:
+            params.message.task_id = str(uuid.uuid4())
+
+    async def on_message_send(
+        self, params: MessageSendParams, context: ServerCallContext | None = None
+    ) -> Union[Message, Task]:
+        self._ensure_task_id(params)
+        return await super().on_message_send(params, context)
+
+    async def on_message_send_stream(
+        self, params: MessageSendParams, context: ServerCallContext | None = None
+    ) -> AsyncGenerator[Union[Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent], None]:
+        self._ensure_task_id(params)
+        return super().on_message_send_stream(params, context)
+
+
 def create_app():
-    handler = DefaultRequestHandler(
+    handler = RobustRequestHandler(
         agent_executor=CDSAgentExecutor(),
         task_store=InMemoryTaskStore(),
     )

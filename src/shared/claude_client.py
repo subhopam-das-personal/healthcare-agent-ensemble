@@ -3,7 +3,8 @@
 import os
 import json
 import logging
-from anthropic import Anthropic
+from collections.abc import AsyncGenerator
+from anthropic import Anthropic, AsyncAnthropic
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,13 @@ def get_client() -> Anthropic:
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY environment variable is required")
     return Anthropic(api_key=api_key, timeout=CLAUDE_TIMEOUT)
+
+
+def get_async_client() -> AsyncAnthropic:
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY environment variable is required")
+    return AsyncAnthropic(api_key=api_key, timeout=CLAUDE_TIMEOUT)
 
 
 DDX_SYSTEM_PROMPT = """You are a clinical decision support assistant specializing in differential diagnosis.
@@ -224,3 +232,76 @@ Drug Interaction Analysis:
     except Exception as e:
         logger.error(f"Claude synthesis failed: {e}")
         return {"error": f"AI reasoning failed: {str(e)}"}
+
+
+# ── Async streaming generators ──────────────────────────────────────────────
+
+
+async def stream_ddx_tokens(
+    patient_data: dict, symptoms: str = ""
+) -> AsyncGenerator[str, None]:
+    """Async generator yielding differential diagnosis text tokens as they arrive."""
+    user_content = f"Patient Data:\n{json.dumps(patient_data, indent=2)}"
+    if symptoms:
+        user_content += f"\n\nAdditional Symptoms Reported:\n{symptoms}"
+    client = get_async_client()
+    async with client.messages.stream(
+        model=CLAUDE_MODEL,
+        max_tokens=4096,
+        system=DDX_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_content}],
+    ) as stream:
+        async for text in stream.text_stream:
+            yield text
+
+
+async def stream_drug_interaction_tokens(
+    patient_data: dict,
+    rxnav_interactions: dict | None = None,
+    proposed_medications: list[str] | None = None,
+) -> AsyncGenerator[str, None]:
+    """Async generator yielding drug interaction analysis tokens as they arrive."""
+    user_content = f"Patient Data:\n{json.dumps(patient_data, indent=2)}"
+    if rxnav_interactions:
+        user_content += f"\n\nRxNav Database Interactions:\n{json.dumps(rxnav_interactions, indent=2)}"
+    else:
+        user_content += "\n\nNo database interactions found. Please analyze based on pharmacological knowledge (label as AI-generated)."
+    if proposed_medications:
+        user_content += f"\n\nProposed New Medications to Check:\n{json.dumps(proposed_medications)}"
+    client = get_async_client()
+    async with client.messages.stream(
+        model=CLAUDE_MODEL,
+        max_tokens=4096,
+        system=DRUG_INTERACTION_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_content}],
+    ) as stream:
+        async for text in stream.text_stream:
+            yield text
+
+
+async def stream_synthesis_tokens(
+    patient_summary: dict,
+    ddx_results: dict,
+    interaction_results: dict,
+    care_gaps: dict | None = None,
+) -> AsyncGenerator[str, None]:
+    """Async generator yielding integrated clinical assessment tokens as they arrive."""
+    user_content = f"""Patient Summary:
+{json.dumps(patient_summary, indent=2)}
+
+Differential Diagnosis Analysis:
+{json.dumps(ddx_results, indent=2)}
+
+Drug Interaction Analysis:
+{json.dumps(interaction_results, indent=2)}"""
+    if care_gaps:
+        user_content += f"\n\nCare Gap Analysis:\n{json.dumps(care_gaps, indent=2)}"
+    client = get_async_client()
+    async with client.messages.stream(
+        model=CLAUDE_MODEL,
+        max_tokens=4096,
+        system=SYNTHESIS_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_content}],
+    ) as stream:
+        async for text in stream.text_stream:
+            yield text

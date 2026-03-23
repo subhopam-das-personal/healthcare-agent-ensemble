@@ -1,6 +1,5 @@
-"""CDS Agent Executor — orchestrates clinical tools via MCP protocol."""
+"""CDS Agent Executor — direct FHIR + streaming Claude reasoning."""
 
-import asyncio
 import json
 import logging
 import re
@@ -13,13 +12,12 @@ from a2a.utils import new_agent_text_message, new_task
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from shared.fhir_client import DEFAULT_FHIR_BASE_URL
-from shared.mcp_client import (
-    make_mcp_session,
-    mcp_get_patient_summary,
-    mcp_generate_differential_diagnosis,
-    mcp_check_drug_interactions,
-    mcp_synthesize_clinical_assessment,
+from shared.fhir_client import get_patient_data, DEFAULT_FHIR_BASE_URL
+from shared.rxnav_client import resolve_medications_to_rxcuis, get_interactions
+from shared.claude_client import (
+    stream_ddx_tokens,
+    stream_drug_interaction_tokens,
+    stream_synthesis_tokens,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,7 +51,6 @@ def _extract_fhir_url_from_text(text: str) -> str:
     """Extract FHIR base URL if explicitly mentioned in the text."""
     match = re.search(r"https?://[^\s/]+(?:/[^\s]*)?/(?=Patient|Observation|Condition)", text)
     if match:
-        # Return just the base up to the resource type
         url = match.group(0).rstrip("/")
         return url
     return DEFAULT_FHIR_BASE_URL
@@ -61,6 +58,26 @@ def _extract_fhir_url_from_text(text: str) -> str:
 
 def _status_msg(text: str):
     return new_agent_text_message(text)
+
+
+def _parse_json_text(text: str) -> dict:
+    """Parse JSON from accumulated streaming text, handling markdown code blocks."""
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    if "```json" in text:
+        try:
+            return json.loads(text.split("```json")[1].split("```")[0].strip())
+        except (json.JSONDecodeError, IndexError):
+            pass
+    if "```" in text:
+        try:
+            return json.loads(text.split("```")[1].split("```")[0].strip())
+        except (json.JSONDecodeError, IndexError):
+            pass
+    return {"raw_response": text}
 
 
 def _parse_user_input(context: RequestContext) -> dict:
@@ -85,7 +102,7 @@ def _parse_user_input(context: RequestContext) -> dict:
     except (json.JSONDecodeError, TypeError):
         pass
 
-    # 2. Extract UUID patient ID from natural language (e.g. Prompt Opinion platform input)
+    # 2. Extract UUID patient ID from natural language (e.g. PromptOpinion platform input)
     uuids = _UUID_RE.findall(text)
     if uuids:
         patient_id = uuids[0]
@@ -142,34 +159,42 @@ class CDSAgentExecutor(AgentExecutor):
             return
 
         skill = params["skill"]
+        try:
+            if skill == "quick-drug-check":
+                await self._quick_drug_check(updater, event_queue, params)
+            elif skill == "differential-diagnosis":
+                await self._differential_diagnosis(updater, event_queue, params)
+            else:
+                await self._comprehensive_review(updater, event_queue, params)
+        except Exception as e:
+            logger.error(f"Agent execution failed: {e}", exc_info=True)
+            await updater.update_status(
+                TaskState.failed,
+                message=_status_msg(f"Error: {str(e)}"),
+            )
 
-        async with make_mcp_session() as session:
-            try:
-                if skill == "quick-drug-check":
-                    await self._quick_drug_check(updater, event_queue, params, session)
-                elif skill == "differential-diagnosis":
-                    await self._differential_diagnosis(updater, event_queue, params, session)
-                else:
-                    await self._comprehensive_review(updater, event_queue, params, session)
-            except Exception as e:
-                logger.error(f"Agent execution failed: {e}", exc_info=True)
-                await updater.update_status(
-                    TaskState.failed,
-                    message=_status_msg(f"Error: {str(e)}"),
-                )
+    async def _fetch_patient(self, patient_id: str, fhir_base_url: str, token: str | None) -> dict:
+        return await get_patient_data(patient_id, fhir_base_url, token)
 
-    async def _comprehensive_review(self, updater, event_queue, params, session):
+    async def _fetch_rxnav(self, medications: list) -> dict | None:
+        if len(medications) < 2:
+            return None
+        enriched = await resolve_medications_to_rxcuis(medications)
+        rxcuis = [m["rxcui"] for m in enriched if m.get("rxcui")]
+        if len(rxcuis) < 2:
+            return None
+        return await get_interactions(rxcuis)
+
+    async def _comprehensive_review(self, updater, event_queue, params):
         patient_id = params["patient_id"]
         fhir_base_url = params["fhir_base_url"]
-        token = params["access_token"] or ""
+        token = params["access_token"] or None
 
         # Step 1: Fetch patient data
         await updater.update_status(TaskState.working,
             message=_status_msg("Step 1/4: Fetching patient data from FHIR..."))
-        await updater.update_status(TaskState.working,
-            message=_status_msg(f"→ Calling MCP: get_patient_summary(patient_id={patient_id!r})"))
 
-        patient_data = await mcp_get_patient_summary(session, patient_id, fhir_base_url, token)
+        patient_data = await self._fetch_patient(patient_id, fhir_base_url, token)
         if "error" in patient_data:
             await updater.update_status(TaskState.failed,
                 message=_status_msg(f"FHIR fetch failed: {patient_data['error']}"))
@@ -177,143 +202,112 @@ class CDSAgentExecutor(AgentExecutor):
 
         pt = patient_data.get("patient", {})
         await updater.update_status(TaskState.working, message=_status_msg(
-            f"← Patient data: {pt.get('name', patient_id)}, "
+            f"Patient: {pt.get('name', patient_id)}, "
             f"{len(patient_data.get('conditions', []))} conditions, "
             f"{len(patient_data.get('medications', []))} medications"
         ))
 
-        patient_json_str = json.dumps(patient_data)
+        # Step 2: RxNav drug interaction database lookup
+        await updater.update_status(TaskState.working,
+            message=_status_msg("Step 2/4: Looking up drug interaction database..."))
+        rxnav_results = await self._fetch_rxnav(patient_data.get("medications", []))
 
-        # Step 2: Parallel DDx + drug interactions
+        # Step 3: Stream differential diagnosis
         await updater.update_status(TaskState.working,
-            message=_status_msg("Step 2/4: Running differential diagnosis + drug interaction analysis in parallel..."))
-        await updater.update_status(TaskState.working,
-            message=_status_msg("→ Calling MCP: generate_differential_diagnosis(...)"))
-        await updater.update_status(TaskState.working,
-            message=_status_msg("→ Calling MCP: check_drug_interactions(...)"))
+            message=_status_msg("Step 3/4: Streaming differential diagnosis..."))
+        await event_queue.enqueue_event(new_agent_text_message("\n## Differential Diagnosis\n\n"))
 
-        ddx_results, interaction_results = await asyncio.gather(
-            mcp_generate_differential_diagnosis(
-                session, patient_id, fhir_base_url,
-                symptoms=params.get("symptoms", ""),
-                access_token=token,
-                patient_json=patient_json_str,
-            ),
-            mcp_check_drug_interactions(
-                session, patient_id, fhir_base_url,
-                proposed_medications=params.get("proposed_medications", ""),
-                access_token=token,
-                patient_json=patient_json_str,
-            ),
-        )
+        ddx_text = ""
+        async for chunk in stream_ddx_tokens(patient_data, params.get("symptoms", "")):
+            ddx_text += chunk
+            await event_queue.enqueue_event(new_agent_text_message(chunk))
+        ddx_results = _parse_json_text(ddx_text)
 
-        top_ddx = ""
-        if isinstance(ddx_results, dict) and ddx_results.get("differentials"):
-            d = ddx_results["differentials"][0]
-            top_ddx = f"{d.get('diagnosis', '?')} ({d.get('confidence', '?')})"
+        # Stream drug interactions
+        await event_queue.enqueue_event(new_agent_text_message("\n\n## Drug Interaction Analysis\n\n"))
+        proposed = [m.strip() for m in params.get("proposed_medications", "").split(",")
+                    if m.strip()] if params.get("proposed_medications") else None
+
+        drug_text = ""
+        async for chunk in stream_drug_interaction_tokens(patient_data, rxnav_results, proposed):
+            drug_text += chunk
+            await event_queue.enqueue_event(new_agent_text_message(chunk))
+        interaction_results = _parse_json_text(drug_text)
+
+        # Step 4: Stream integrated synthesis
         await updater.update_status(TaskState.working,
-            message=_status_msg(
-                f"← DDx: {len(ddx_results.get('differentials', []))} differentials"
-                + (f", top: {top_ddx}" if top_ddx else "")
+            message=_status_msg("Step 4/4: Streaming integrated clinical assessment..."))
+        await event_queue.enqueue_event(new_agent_text_message("\n\n## Integrated Clinical Assessment\n\n"))
+
+        async for chunk in stream_synthesis_tokens(patient_data, ddx_results, interaction_results):
+            await event_queue.enqueue_event(new_agent_text_message(chunk))
+
+        await updater.complete()
+
+    async def _quick_drug_check(self, updater, event_queue, params):
+        patient_id = params["patient_id"]
+        fhir_base_url = params["fhir_base_url"]
+        token = params["access_token"] or None
+
+        await updater.update_status(TaskState.working,
+            message=_status_msg("Fetching patient medications from FHIR..."))
+
+        patient_data = await self._fetch_patient(patient_id, fhir_base_url, token)
+        if "error" in patient_data:
+            await updater.update_status(TaskState.failed,
+                message=_status_msg(f"Drug check failed: {patient_data['error']}"))
+            return
+
+        medications = patient_data.get("medications", [])
+        if not medications:
+            await event_queue.enqueue_event(new_agent_text_message(
+                json.dumps({"interactions": [], "note": "No medications found.", "overall_risk_level": "N/A"}, indent=2)
             ))
-
-        risk = interaction_results.get("overall_risk_level", "?") if isinstance(interaction_results, dict) else "?"
-        n_interactions = len(interaction_results.get("interactions", [])) if isinstance(interaction_results, dict) else 0
-        await updater.update_status(TaskState.working,
-            message=_status_msg(f"← Drug interactions: {n_interactions} found, risk level: {risk}"))
-
-        # Step 3: Synthesize
-        await updater.update_status(TaskState.working,
-            message=_status_msg("Step 3/4: Synthesizing cross-cutting clinical assessment..."))
-        await updater.update_status(TaskState.working,
-            message=_status_msg("→ Calling MCP: synthesize_clinical_assessment(...)"))
-
-        synthesis = await mcp_synthesize_clinical_assessment(
-            session,
-            patient_summary_json=patient_json_str,
-            ddx_results_json=json.dumps(ddx_results),
-            interaction_results_json=json.dumps(interaction_results),
-        )
-
-        await updater.update_status(TaskState.working,
-            message=_status_msg("← Synthesis complete"))
-
-        # Step 4: Return
-        await updater.update_status(TaskState.working,
-            message=_status_msg("Step 4/4: Preparing clinical briefing..."))
-
-        final_output = {
-            "assessment_type": "Comprehensive Clinical Review",
-            "patient_id": patient_id,
-            "patient_summary": patient_data.get("patient", {}),
-            "synthesis": synthesis,
-            "detailed_analyses": {
-                "differential_diagnosis": ddx_results,
-                "drug_interactions": interaction_results,
-            },
-            "disclaimer": "All outputs require review by a licensed healthcare provider.",
-        }
-        await event_queue.enqueue_event(new_agent_text_message(json.dumps(final_output, indent=2)))
-        await updater.complete()
-
-    async def _quick_drug_check(self, updater, event_queue, params, session):
-        patient_id = params["patient_id"]
-        fhir_base_url = params["fhir_base_url"]
-        token = params["access_token"] or ""
-
-        await updater.update_status(TaskState.working,
-            message=_status_msg("Fetching patient medications..."))
-        await updater.update_status(TaskState.working,
-            message=_status_msg(f"→ Calling MCP: check_drug_interactions(patient_id={patient_id!r})"))
-
-        result = await mcp_check_drug_interactions(
-            session, patient_id, fhir_base_url,
-            proposed_medications=params.get("proposed_medications", ""),
-            access_token=token,
-        )
-
-        if "error" in result:
-            await updater.update_status(TaskState.failed,
-                message=_status_msg(f"Drug check failed: {result['error']}"))
+            await updater.complete()
             return
 
-        risk = result.get("overall_risk_level", "?")
-        n = len(result.get("interactions", []))
         await updater.update_status(TaskState.working,
-            message=_status_msg(f"← Drug interactions: {n} found, risk level: {risk}"))
+            message=_status_msg(f"{len(medications)} medications found. Looking up interactions..."))
+        rxnav_results = await self._fetch_rxnav(medications)
 
-        await event_queue.enqueue_event(new_agent_text_message(json.dumps(result, indent=2)))
+        proposed = [m.strip() for m in params.get("proposed_medications", "").split(",")
+                    if m.strip()] if params.get("proposed_medications") else None
+
+        await updater.update_status(TaskState.working,
+            message=_status_msg("Streaming drug interaction analysis..."))
+        await event_queue.enqueue_event(new_agent_text_message("\n## Drug Interaction Analysis\n\n"))
+
+        async for chunk in stream_drug_interaction_tokens(patient_data, rxnav_results, proposed):
+            await event_queue.enqueue_event(new_agent_text_message(chunk))
+
         await updater.complete()
 
-    async def _differential_diagnosis(self, updater, event_queue, params, session):
+    async def _differential_diagnosis(self, updater, event_queue, params):
         patient_id = params["patient_id"]
         fhir_base_url = params["fhir_base_url"]
-        token = params["access_token"] or ""
+        token = params["access_token"] or None
 
         await updater.update_status(TaskState.working,
-            message=_status_msg("Fetching patient data for differential diagnosis..."))
-        await updater.update_status(TaskState.working,
-            message=_status_msg(f"→ Calling MCP: generate_differential_diagnosis(patient_id={patient_id!r})"))
+            message=_status_msg("Fetching patient data from FHIR..."))
 
-        result = await mcp_generate_differential_diagnosis(
-            session, patient_id, fhir_base_url,
-            symptoms=params.get("symptoms", ""),
-            access_token=token,
-        )
-
-        if "error" in result:
+        patient_data = await self._fetch_patient(patient_id, fhir_base_url, token)
+        if "error" in patient_data:
             await updater.update_status(TaskState.failed,
-                message=_status_msg(f"DDx failed: {result['error']}"))
+                message=_status_msg(f"DDx failed: {patient_data['error']}"))
             return
 
-        top = ""
-        if result.get("differentials"):
-            d = result["differentials"][0]
-            top = f", top: {d.get('diagnosis', '?')} ({d.get('confidence', '?')})"
-        await updater.update_status(TaskState.working,
-            message=_status_msg(f"← DDx: {len(result.get('differentials', []))} differentials{top}"))
+        if not patient_data.get("conditions") and not params.get("symptoms"):
+            await updater.update_status(TaskState.failed,
+                message=_status_msg("No conditions found and no symptoms provided."))
+            return
 
-        await event_queue.enqueue_event(new_agent_text_message(json.dumps(result, indent=2)))
+        await updater.update_status(TaskState.working,
+            message=_status_msg("Streaming differential diagnosis..."))
+        await event_queue.enqueue_event(new_agent_text_message("\n## Differential Diagnosis\n\n"))
+
+        async for chunk in stream_ddx_tokens(patient_data, params.get("symptoms", "")):
+            await event_queue.enqueue_event(new_agent_text_message(chunk))
+
         await updater.complete()
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:

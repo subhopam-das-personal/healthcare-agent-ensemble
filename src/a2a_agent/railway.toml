@@ -1,0 +1,5 @@
+[deploy]
+startCommand = "python src/a2a_agent/server.py"
+healthcheckPath = "/.well-known/agent.json"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
