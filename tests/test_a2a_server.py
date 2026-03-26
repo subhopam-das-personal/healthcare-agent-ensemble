@@ -94,22 +94,27 @@ class TestOnMessageSendStream:
         result.aclose()  # clean up
 
     @pytest.mark.asyncio
-    async def test_patches_task_id_before_yielding(self):
-        """_ensure_task_id must be called before streaming starts."""
+    async def test_does_not_inject_task_id_for_streaming(self):
+        """on_message_send_stream must NOT call _ensure_task_id.
+
+        Injecting a random task_id causes the SDK to look it up in
+        InMemoryTaskStore, find nothing, and return a -32001 error.
+        The SDK creates its own task for new streams when task_id is absent.
+        """
         h = _make_handler()
         params = _make_params(task_id=None)
         sentinel = object()
 
-        async def _fake_super_gen(self_, p, c):  # patch.object passes self as first arg
+        async def _fake_super_gen(self_, p, c):
             yield sentinel
 
         with patch.object(DefaultRequestHandler, "on_message_send_stream", _fake_super_gen):
             events = [e async for e in h.on_message_send_stream(params, None)]
 
-        assert params.message.task_id is not None, (
-            "_ensure_task_id should have set task_id before streaming"
+        assert params.message.task_id is None, (
+            "on_message_send_stream must not set task_id — SDK handles task creation"
         )
-        assert events == [sentinel], "All events from super() should be forwarded"
+        assert events == [sentinel]
 
     @pytest.mark.asyncio
     async def test_forwards_all_events_from_super(self):

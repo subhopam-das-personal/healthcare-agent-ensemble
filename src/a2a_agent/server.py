@@ -109,7 +109,9 @@ class RobustRequestHandler(DefaultRequestHandler):
     async def on_message_send_stream(
         self, params: MessageSendParams, context: ServerCallContext | None = None
     ) -> AsyncGenerator[Union[Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent], None]:
-        self._ensure_task_id(params)
+        # Do NOT inject task_id here: the SDK creates its own task for new streams.
+        # Injecting a random task_id causes "Task X does not exist" because the
+        # generated ID was never saved to InMemoryTaskStore before the lookup.
         async for event in super().on_message_send_stream(params, context):
             yield event
 
