@@ -110,9 +110,14 @@ async def stream(
                         yield {"data": f"\n\n**Error:** A2A agent returned {resp.status_code}: {err[:200].decode(errors='replace')}"}
                         return
 
+                    line_count = 0
                     async for line in resp.aiter_lines():
                         if await request.is_disconnected():
                             return
+                        # Log first 20 lines to diagnose SSE format
+                        if line_count < 20:
+                            logger.info(f"[A2A SSE line {line_count}] {line[:200]!r}")
+                        line_count += 1
                         if not line.startswith("data:"):
                             continue
                         raw = line[5:].strip()
@@ -121,10 +126,14 @@ async def stream(
                         try:
                             event_data = json.loads(raw)
                         except json.JSONDecodeError:
+                            logger.warning(f"[A2A SSE] non-JSON data: {raw[:100]!r}")
                             continue
                         text = _a2a_text_from_event(event_data)
+                        if line_count <= 20:
+                            logger.info(f"[A2A SSE] extracted text: {text!r}")
                         if text:
                             yield {"data": text}
+                    logger.info(f"[A2A SSE] stream ended after {line_count} lines")
         except httpx.ConnectError as e:
             logger.error(f"Cannot connect to A2A agent at {A2A_AGENT_URL}: {e}")
             yield {"data": f"\n\n**Error:** Cannot connect to A2A agent at {A2A_AGENT_URL}"}
