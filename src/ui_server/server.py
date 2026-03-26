@@ -1,14 +1,13 @@
-"""CDS UI Server — FastAPI + SSE streaming frontend for the A2A executor."""
+"""CDS UI Server — FastAPI + SSE streaming frontend for the A2A agent."""
 
-import asyncio
 import json
 import logging
 import os
 import sys
 import uuid
-from asyncio import Queue
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -18,80 +17,41 @@ from fastapi.responses import FileResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from a2a_agent.executor import CDSAgentExecutor
-from shared.fhir_client import DEFAULT_FHIR_BASE_URL
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 PORT = int(os.environ.get("PORT", os.environ.get("UI_PORT", 7000)))
+def _resolve_a2a_url() -> str:
+    url = os.environ.get("A2A_AGENT_URL")
+    if url:
+        return url
+    # Railway injects the service hostname without a scheme
+    host = os.environ.get("RAILWAY_SERVICE_A2A_AGENT_URL")
+    if host:
+        scheme = "https" if "railway.app" in host else "http"
+        return f"{scheme}://{host}"
+    return "http://localhost:9999"
+
+A2A_AGENT_URL = _resolve_a2a_url()
 
 app = FastAPI(title="CDS UI")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-_executor = CDSAgentExecutor()
 
-
-# ── A2A event text extraction ─────────────────────────────────────────────────
-
-def _extract_text(event) -> str:
-    """Extract plain text from any A2A event type."""
-    try:
-        from a2a.types import Message
-        if isinstance(event, Message):
-            for part in event.parts:
-                inner = part.root if hasattr(part, "root") else part
-                if hasattr(inner, "text"):
-                    return inner.text or ""
-    except Exception:
-        pass
-    return ""
-
-
-# ── SSE queue bridge ──────────────────────────────────────────────────────────
-
-class SSEQueue:
-    """Bridges CDSAgentExecutor events into an asyncio Queue for SSE consumption."""
-
-    def __init__(self):
-        self._q: Queue = Queue()
-
-    async def enqueue_event(self, event) -> None:
-        text = _extract_text(event)
+def _a2a_text_from_event(event_data: dict) -> str | None:
+    """Extract streamed text from an A2A SSE event (Message events only)."""
+    result = event_data.get("result", {})
+    # Message event has "parts" at top level; TaskStatusUpdateEvent has "status"
+    parts = result.get("parts")
+    if not parts:
+        return None
+    for part in parts:
+        text = part.get("text", "")
         if text:
-            await self._q.put(text)
-
-    async def drain(self):
-        while True:
-            chunk = await self._q.get()
-            if chunk is None:
-                return
-            yield chunk
-
-    async def close(self):
-        await self._q.put(None)
-
-
-# ── A2A RequestContext bridge ─────────────────────────────────────────────────
-
-from a2a.types import Message, Part, TextPart
-
-
-def _build_context(params: dict):
-    """Build a minimal RequestContext using real A2A types so Pydantic validates."""
-    msg = Message(
-        role="user",
-        messageId=str(uuid.uuid4()),
-        parts=[Part(root=TextPart(text=json.dumps(params)))],
-    )
-
-    class _Context:
-        def __init__(self, message: Message):
-            self.message = message
-            self.current_task = None
-
-    return _Context(msg)
+            return text
+    return None
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -118,41 +78,59 @@ async def stream(
 
     params = {
         "patient_id": patient_id.strip(),
-        "fhir_base_url": DEFAULT_FHIR_BASE_URL,
-        "symptoms": symptoms,
         "skill": skill,
+        "symptoms": symptoms,
         "proposed_medications": proposed_medications,
-        "access_token": "",
     }
 
-    queue = SSEQueue()
-    ctx = _build_context(params)
-
-    async def run():
-        try:
-            await _executor.execute(ctx, queue)
-        except Exception as e:
-            logger.error(f"Executor error: {e}", exc_info=True)
-            await queue._q.put(f"\n\n**Error:** {e}")
-        finally:
-            await queue.close()
+    payload = {
+        "jsonrpc": "2.0",
+        "id": str(uuid.uuid4()),
+        "method": "message/stream",
+        "params": {
+            "message": {
+                "role": "user",
+                "messageId": str(uuid.uuid4()),
+                "parts": [{"kind": "text", "text": json.dumps(params)}],
+            }
+        },
+    }
 
     async def event_gen():
-        task = asyncio.create_task(run())
-        last_keepalive = asyncio.get_event_loop().time()
         try:
-            async for chunk in queue.drain():
-                if await request.is_disconnected():
-                    logger.info("Client disconnected — cancelling executor task")
-                    task.cancel()
-                    return
-                yield {"data": chunk}
-                now = asyncio.get_event_loop().time()
-                if now - last_keepalive > 15:
-                    yield {"comment": "keepalive"}
-                    last_keepalive = now
-        finally:
-            task.cancel()
+            async with httpx.AsyncClient(timeout=300) as client:
+                async with client.stream(
+                    "POST",
+                    A2A_AGENT_URL,
+                    json=payload,
+                    headers={"Accept": "text/event-stream", "Content-Type": "application/json"},
+                ) as resp:
+                    if resp.status_code != 200:
+                        err = await resp.aread()
+                        yield {"data": f"\n\n**Error:** A2A agent returned {resp.status_code}: {err[:200].decode(errors='replace')}"}
+                        return
+
+                    async for line in resp.aiter_lines():
+                        if await request.is_disconnected():
+                            return
+                        if not line.startswith("data:"):
+                            continue
+                        raw = line[5:].strip()
+                        if not raw or raw == "[DONE]":
+                            continue
+                        try:
+                            event_data = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+                        text = _a2a_text_from_event(event_data)
+                        if text:
+                            yield {"data": text}
+        except httpx.ConnectError as e:
+            logger.error(f"Cannot connect to A2A agent at {A2A_AGENT_URL}: {e}")
+            yield {"data": f"\n\n**Error:** Cannot connect to A2A agent at {A2A_AGENT_URL}"}
+        except Exception as e:
+            logger.error(f"A2A stream error: {e}", exc_info=True)
+            yield {"data": f"\n\n**Error:** {e}"}
 
     return EventSourceResponse(event_gen())
 
@@ -211,5 +189,5 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
-    logger.info(f"Starting CDS UI Server on port {PORT}")
+    logger.info(f"Starting CDS UI Server on port {PORT} → A2A agent: {A2A_AGENT_URL}")
     uvicorn.run(app, host="0.0.0.0", port=PORT)
