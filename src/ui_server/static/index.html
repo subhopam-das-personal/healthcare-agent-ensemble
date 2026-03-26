@@ -174,6 +174,13 @@
   .chat-bubble { border-radius: 10px; padding: 8px 12px; font-size: 13px; line-height: 1.5; max-width: 85%; }
   .chat-bubble.user { background: #0f4c81; color: #fff; align-self: flex-end; }
   .chat-bubble.ai { background: #f5f7fa; color: #333; align-self: flex-start; border: 1px solid #e8ecf0; }
+  .chat-bubble.ai p { margin: 0 0 6px; }
+  .chat-bubble.ai p:last-child { margin-bottom: 0; }
+  .chat-bubble.ai ul, .chat-bubble.ai ol { margin: 4px 0 6px 16px; padding: 0; }
+  .chat-bubble.ai li { margin-bottom: 2px; }
+  .chat-bubble.ai strong { font-weight: 600; }
+  .chat-bubble.ai h2, .chat-bubble.ai h3, .chat-bubble.ai h4 { margin: 8px 0 4px; font-size: 13px; font-weight: 700; }
+  .chat-bubble.ai code { background: #eaecf0; border-radius: 3px; padding: 1px 4px; font-size: 12px; font-family: monospace; }
   .chat-bubble.ai.streaming { border-color: #b3c7ee; }
   .chat-input-row { display: flex; gap: 8px; }
   .chat-input { flex: 1; border: 1px solid #d0d5dd; border-radius: 8px; padding: 9px 12px; font-size: 13px; font-family: inherit; resize: none; height: 38px; line-height: 1.4; }
@@ -183,6 +190,7 @@
   .chat-send-btn:disabled { background: #9bb5d4; cursor: not-allowed; }
   .chat-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #888; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
 </head>
 <body>
 
@@ -881,7 +889,7 @@ function sendChat() {
   // Add AI bubble
   const aiBubble = document.createElement('div');
   aiBubble.className = 'chat-bubble ai streaming';
-  aiBubble.textContent = '';
+  aiBubble.innerHTML = '';
   history.appendChild(aiBubble);
 
   const patientId = document.getElementById('patient-id').value.trim();
@@ -891,29 +899,34 @@ function sendChat() {
     context: analysisContext,
   });
 
+  let chatRaw = '';
+  let chatRenderTick = null;
+
+  function renderChatMarkdown() {
+    chatRenderTick = null;
+    aiBubble.innerHTML = marked.parse(chatRaw);
+    history.scrollTop = history.scrollHeight;
+  }
+
+  function finalizeChatBubble() {
+    if (chatRenderTick) { clearTimeout(chatRenderTick); chatRenderTick = null; }
+    aiBubble.innerHTML = marked.parse(chatRaw);
+    aiBubble.classList.remove('streaming');
+    sendBtn.disabled = false;
+    history.scrollTop = history.scrollHeight;
+  }
+
   const es = new EventSource(`/chat?${params}`);
   es.onmessage = (evt) => {
-    aiBubble.textContent += evt.data;
-    history.scrollTop = history.scrollHeight;
+    chatRaw += evt.data;
+    if (!chatRenderTick) chatRenderTick = setTimeout(renderChatMarkdown, 120);
   };
-  es.onerror = () => {
-    es.close();
-    aiBubble.classList.remove('streaming');
-    sendBtn.disabled = false;
-  };
-  es.addEventListener('close', () => {
-    es.close();
-    aiBubble.classList.remove('streaming');
-    sendBtn.disabled = false;
-  });
+  es.onerror = () => { es.close(); finalizeChatBubble(); };
+  es.addEventListener('close', () => { es.close(); finalizeChatBubble(); });
 
   // Poll for close
   const poll = setInterval(() => {
-    if (es.readyState === 2) {
-      clearInterval(poll);
-      aiBubble.classList.remove('streaming');
-      sendBtn.disabled = false;
-    }
+    if (es.readyState === 2) { clearInterval(poll); finalizeChatBubble(); }
   }, 400);
 }
 
