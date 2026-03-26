@@ -5,7 +5,10 @@ set -euo pipefail
 
 SERVICE="${RAILWAY_SERVICE_NAME:-}"
 
-if [ "$SERVICE" = "a2a-agent" ]; then
+if [ "$SERVICE" = "ui-server" ]; then
+  echo "Starting UI server (service: $SERVICE)"
+  exec python src/ui_server/server.py
+elif [ "$SERVICE" = "a2a-agent" ]; then
   echo "Starting A2A agent (service: $SERVICE)"
   exec python src/a2a_agent/server.py
 else
