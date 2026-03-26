@@ -87,10 +87,17 @@ class TestParseUserInput:
         result = _parse_user_input(ctx)
         assert result["patient_id"] == "smart-111"
 
-    def test_invalid_json_falls_back_to_plain_text(self):
+    def test_invalid_json_with_spaces_returns_empty_patient_id(self):
+        # "{not valid json}" has spaces → not a bare patient ID → patient_id is empty
         ctx = _make_context("{not valid json}")
         result = _parse_user_input(ctx)
-        assert result["patient_id"] == "{not valid json}"
+        assert result["patient_id"] == ""
+
+    def test_invalid_json_no_spaces_used_as_patient_id(self):
+        # No spaces → treated as bare patient ID (step 3 fallback)
+        ctx = _make_context("not-valid-json-but-no-spaces")
+        result = _parse_user_input(ctx)
+        assert result["patient_id"] == "not-valid-json-but-no-spaces"
 
     def test_multiple_parts_concatenated(self):
         """Multiple text parts should be concatenated before parsing."""
@@ -147,17 +154,6 @@ async def test_execute_fails_when_no_patient_id():
            call_args.args[0] == TaskState.failed
 
 
-def _mock_mcp_session():
-    """Return a context manager mock that yields a fake MCP session."""
-    from contextlib import asynccontextmanager
-    session = AsyncMock()
-
-    @asynccontextmanager
-    async def _ctx():
-        yield session
-
-    return _ctx()
-
 
 @pytest.mark.asyncio
 async def test_execute_routes_to_quick_drug_check():
@@ -173,7 +169,6 @@ async def test_execute_routes_to_quick_drug_check():
 
     with patch("a2a_agent.executor.new_task", return_value=task_mock), \
          patch("a2a_agent.executor.TaskUpdater") as mock_updater_cls, \
-         patch("a2a_agent.executor.make_mcp_session", return_value=_mock_mcp_session()), \
          patch.object(executor, "_quick_drug_check", new_callable=AsyncMock) as mock_drug:
         mock_updater = AsyncMock()
         mock_updater_cls.return_value = mock_updater
@@ -196,7 +191,6 @@ async def test_execute_routes_to_differential_diagnosis():
 
     with patch("a2a_agent.executor.new_task", return_value=task_mock), \
          patch("a2a_agent.executor.TaskUpdater") as mock_updater_cls, \
-         patch("a2a_agent.executor.make_mcp_session", return_value=_mock_mcp_session()), \
          patch.object(executor, "_differential_diagnosis", new_callable=AsyncMock) as mock_ddx:
         mock_updater = AsyncMock()
         mock_updater_cls.return_value = mock_updater
@@ -219,7 +213,6 @@ async def test_execute_routes_to_comprehensive_review_by_default():
 
     with patch("a2a_agent.executor.new_task", return_value=task_mock), \
          patch("a2a_agent.executor.TaskUpdater") as mock_updater_cls, \
-         patch("a2a_agent.executor.make_mcp_session", return_value=_mock_mcp_session()), \
          patch.object(executor, "_comprehensive_review", new_callable=AsyncMock) as mock_review:
         mock_updater = AsyncMock()
         mock_updater_cls.return_value = mock_updater
@@ -242,7 +235,6 @@ async def test_execute_handles_unexpected_exception():
 
     with patch("a2a_agent.executor.new_task", return_value=task_mock), \
          patch("a2a_agent.executor.TaskUpdater") as mock_updater_cls, \
-         patch("a2a_agent.executor.make_mcp_session", return_value=_mock_mcp_session()), \
          patch.object(executor, "_comprehensive_review", new_callable=AsyncMock,
                       side_effect=RuntimeError("DB crashed")):
         mock_updater = AsyncMock()

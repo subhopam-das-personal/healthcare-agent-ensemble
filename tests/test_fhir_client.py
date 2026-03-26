@@ -6,6 +6,7 @@ import sys, os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import shared.fhir_client as fhir_module
 from shared.fhir_client import (
     _extract_entries,
     _parse_patient,
@@ -16,6 +17,19 @@ from shared.fhir_client import (
     get_patient_data,
     DEFAULT_FHIR_BASE_URL,
 )
+
+
+@pytest.fixture(autouse=True)
+def clear_fhir_cache():
+    """Clear the in-memory FHIR patient cache before every test.
+
+    Without this, a successful fetch cached under 'smart-1234567' in one test
+    would be returned by subsequent tests that mock _fhir_get differently,
+    causing those tests to see the cached (wrong) result.
+    """
+    fhir_module._PATIENT_CACHE.clear()
+    yield
+    fhir_module._PATIENT_CACHE.clear()
 
 
 # --------------------------------------------------------------------------- #
