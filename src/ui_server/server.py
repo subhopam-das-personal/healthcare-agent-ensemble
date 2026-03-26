@@ -1,9 +1,11 @@
 """CDS UI Server — FastAPI + SSE streaming frontend for the A2A executor."""
 
 import asyncio
+import json
 import logging
 import os
 import sys
+import uuid
 from asyncio import Queue
 from pathlib import Path
 
@@ -71,26 +73,25 @@ class SSEQueue:
         await self._q.put(None)
 
 
-# ── Fake A2A RequestContext ───────────────────────────────────────────────────
+# ── A2A RequestContext bridge ─────────────────────────────────────────────────
 
-class _FakePart:
-    def __init__(self, text: str):
-        self.root = self
-        self.text = text
+from a2a.types import Message, Part, TextPart
 
-class _FakeMessage:
-    def __init__(self, text: str):
-        self.parts = [_FakePart(text)]
-        self.role = "user"
-        self.task_id = None
-        self.context_id = None
-        self.message_id = None
 
-class _FakeContext:
-    def __init__(self, params: dict):
-        import json
-        self.message = _FakeMessage(json.dumps(params))
-        self.current_task = None
+def _build_context(params: dict):
+    """Build a minimal RequestContext using real A2A types so Pydantic validates."""
+    msg = Message(
+        role="user",
+        messageId=str(uuid.uuid4()),
+        parts=[Part(root=TextPart(text=json.dumps(params)))],
+    )
+
+    class _Context:
+        def __init__(self, message: Message):
+            self.message = message
+            self.current_task = None
+
+    return _Context(msg)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -125,7 +126,7 @@ async def stream(
     }
 
     queue = SSEQueue()
-    ctx = _FakeContext(params)
+    ctx = _build_context(params)
 
     async def run():
         try:
