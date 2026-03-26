@@ -10,26 +10,13 @@ from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
+from httpx_sse import aconnect_sse
 load_dotenv()
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
-
-from a2a.client import A2AClient
-from a2a.client.helpers import create_text_message_object
-from a2a.types import (
-    Message,
-    MessageSendParams,
-    SendStreamingMessageRequest,
-    SendStreamingMessageSuccessResponse,
-    TaskArtifactUpdateEvent,
-    TaskStatusUpdateEvent,
-    TextPart,
-    Part,
-    Role,
-)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -57,38 +44,41 @@ app = FastAPI(title="CDS UI")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
-def _text_from_a2a_event(response) -> str | None:
-    """Extract streamed text from a typed A2A SDK response.
+def _extract_text_from_sse(data: str) -> str | None:
+    """Extract streamed text from a raw A2A SSE event JSON string.
 
-    Handles both TaskArtifactUpdateEvent (streaming chunks) and Message events.
+    Handles artifact-update (streaming chunks) and message (final) events.
     """
-    if not isinstance(response.root, SendStreamingMessageSuccessResponse):
+    try:
+        event = json.loads(data)
+    except json.JSONDecodeError:
         return None
-    result = response.root.result
-    if isinstance(result, TaskArtifactUpdateEvent):
-        for part in result.artifact.parts:
-            inner = part.root if hasattr(part, "root") else part
-            if isinstance(inner, TextPart) and inner.text:
-                return inner.text
-        return None
-    if isinstance(result, Message):
-        for part in result.parts:
-            inner = part.root if hasattr(part, "root") else part
-            if isinstance(inner, TextPart) and inner.text:
-                return inner.text
+    result = event.get("result", {})
+    kind = result.get("kind")
+    if kind == "artifact-update":
+        for part in result.get("artifact", {}).get("parts", []):
+            if part.get("kind") == "text" and part.get("text"):
+                return part["text"]
+    elif kind == "message":
+        for part in result.get("parts", []):
+            if part.get("kind") == "text" and part.get("text"):
+                return part["text"]
     return None
 
 
-def _build_stream_request(params: dict) -> SendStreamingMessageRequest:
-    msg = Message(
-        role=Role.user,
-        message_id=str(uuid.uuid4()),
-        parts=[Part(root=TextPart(text=json.dumps(params)))],
-    )
-    return SendStreamingMessageRequest(
-        id=str(uuid.uuid4()),
-        params=MessageSendParams(message=msg),
-    )
+def _build_a2a_payload(params: dict) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": str(uuid.uuid4()),
+        "method": "message/stream",
+        "params": {
+            "message": {
+                "role": "user",
+                "messageId": str(uuid.uuid4()),
+                "parts": [{"kind": "text", "text": json.dumps(params)}],
+            }
+        },
+    }
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -120,18 +110,21 @@ async def stream(
         "proposed_medications": proposed_medications,
     }
 
-    stream_request = _build_stream_request(params)
+    payload = _build_a2a_payload(params)
 
     async def event_gen():
         try:
-            async with httpx.AsyncClient(timeout=300) as http_client:
-                a2a = A2AClient(httpx_client=http_client, url=A2A_AGENT_URL)
-                async for response in a2a.send_message_streaming(stream_request):
-                    if await request.is_disconnected():
-                        return
-                    text = _text_from_a2a_event(response)
-                    if text:
-                        yield {"data": text}
+            timeout = httpx.Timeout(connect=10, read=300, write=30, pool=30)
+            async with httpx.AsyncClient(timeout=timeout) as http_client:
+                async with aconnect_sse(http_client, "POST", A2A_AGENT_URL, json=payload) as event_source:
+                    async for sse in event_source.aiter_sse():
+                        if await request.is_disconnected():
+                            return
+                        if not sse.data:
+                            continue
+                        text = _extract_text_from_sse(sse.data)
+                        if text:
+                            yield {"data": text}
         except httpx.ConnectError:
             yield {"data": f"\n\n**Error:** Cannot connect to A2A agent at {A2A_AGENT_URL}"}
         except Exception as e:
