@@ -47,7 +47,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 def _extract_text_from_sse(data: str) -> str | None:
     """Extract streamed text from a raw A2A SSE event JSON string.
 
-    Handles artifact-update (streaming chunks) and message (final) events.
+    Handles artifact-update (streaming chunks), message (final), and
+    status-update (failed state) events.
     """
     try:
         event = json.loads(data)
@@ -63,6 +64,14 @@ def _extract_text_from_sse(data: str) -> str | None:
         for part in result.get("parts", []):
             if part.get("kind") == "text" and part.get("text"):
                 return part["text"]
+    elif kind == "status-update":
+        # Forward failed-state messages so the UI can display a meaningful error
+        status = result.get("status", {})
+        if status.get("state") == "failed":
+            msg = status.get("message", {})
+            for part in (msg.get("parts") or []):
+                if part.get("kind") == "text" and part.get("text"):
+                    return f"\n\n**Error:** {part['text']}"
     return None
 
 

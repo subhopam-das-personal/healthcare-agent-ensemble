@@ -548,7 +548,7 @@ function finalizeStream(isError) {
 
   if (isError && sectionOrder.length === 0) {
     const output = document.getElementById('output-scroll');
-    output.innerHTML = `<div class="error-card">⚠ Connection error. Please check the server and try again.</div>`;
+    output.innerHTML = `<div class="error-card">⚠ Analysis failed. Check the patient ID is valid and the server is reachable.</div>`;
   }
 
   // Check red flags from DDx
