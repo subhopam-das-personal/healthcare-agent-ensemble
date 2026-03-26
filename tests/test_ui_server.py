@@ -65,78 +65,95 @@ class TestResolveA2aUrl:
         assert url == "http://localhost:9999"
 
 
-# ── _a2a_text_from_event ──────────────────────────────────────────────────────
+# ── _text_from_a2a_event ──────────────────────────────────────────────────────
 
-class TestA2aTextFromEvent:
+import uuid as _uuid
+from a2a.types import (
+    Message, Part, TextPart, Role, Task, TaskState, TaskStatus,
+    TaskStatusUpdateEvent, SendStreamingMessageResponse,
+    SendStreamingMessageSuccessResponse, JSONRPCErrorResponse,
+    JSONRPCError,
+)
+
+
+def _msg_response(text: str) -> SendStreamingMessageResponse:
+    msg = Message(
+        role=Role.agent,
+        message_id=str(_uuid.uuid4()),
+        parts=[Part(root=TextPart(text=text))],
+    )
+    return SendStreamingMessageResponse(
+        root=SendStreamingMessageSuccessResponse(id="1", result=msg)
+    )
+
+
+def _status_response() -> SendStreamingMessageResponse:
+    status_msg = Message(
+        role=Role.agent,
+        message_id=str(_uuid.uuid4()),
+        parts=[Part(root=TextPart(text="Step 1/4: Fetching FHIR data..."))],
+    )
+    event = TaskStatusUpdateEvent(
+        task_id=str(_uuid.uuid4()),
+        context_id=str(_uuid.uuid4()),
+        status=TaskStatus(state=TaskState.working, message=status_msg),
+        final=False,
+    )
+    return SendStreamingMessageResponse(
+        root=SendStreamingMessageSuccessResponse(id="1", result=event)
+    )
+
+
+def _error_response() -> SendStreamingMessageResponse:
+    return SendStreamingMessageResponse(
+        root=JSONRPCErrorResponse(id="1", error=JSONRPCError(code=-32001, message="not found"))
+    )
+
+
+class TestTextFromA2aEvent:
     @pytest.fixture(autouse=True)
     def _fn(self):
         m = _load_ui_server()
-        self.fn = m._a2a_text_from_event
+        self.fn = m._text_from_a2a_event
 
-    def test_message_event_with_text_part(self):
-        event = {
-            "jsonrpc": "2.0",
-            "id": "1",
-            "result": {
-                "role": "agent",
-                "messageId": "m1",
-                "parts": [{"kind": "text", "text": "## Differential Diagnosis\n\n"}],
-            },
-        }
-        assert self.fn(event) == "## Differential Diagnosis\n\n"
+    def test_message_event_returns_text(self):
+        assert self.fn(_msg_response("## Differential Diagnosis\n\n")) == "## Differential Diagnosis\n\n"
 
     def test_message_event_returns_first_non_empty_part(self):
-        event = {
-            "result": {
-                "parts": [
-                    {"kind": "text", "text": ""},
-                    {"kind": "text", "text": "hello"},
-                    {"kind": "text", "text": "world"},
-                ]
-            }
-        }
-        assert self.fn(event) == "hello"
+        msg = Message(
+            role=Role.agent,
+            message_id=str(_uuid.uuid4()),
+            parts=[
+                Part(root=TextPart(text="")),
+                Part(root=TextPart(text="hello")),
+                Part(root=TextPart(text="world")),
+            ],
+        )
+        resp = SendStreamingMessageResponse(
+            root=SendStreamingMessageSuccessResponse(id="1", result=msg)
+        )
+        assert self.fn(resp) == "hello"
 
-    def test_task_status_update_event_returns_none(self):
-        """TaskStatusUpdateEvent has 'status', not top-level 'parts' — must be ignored."""
-        event = {
-            "result": {
-                "id": "task-1",
-                "status": {
-                    "state": "working",
-                    "message": {
-                        "role": "agent",
-                        "parts": [{"kind": "text", "text": "Step 1/4: Fetching FHIR data..."}],
-                    },
-                },
-            }
-        }
-        assert self.fn(event) is None
-
-    def test_task_object_event_returns_none(self):
-        """Initial Task event has no 'parts' at top level."""
-        event = {
-            "result": {
-                "id": "task-1",
-                "contextId": "ctx-1",
-                "status": {"state": "submitted"},
-                "history": [],
-            }
-        }
-        assert self.fn(event) is None
-
-    def test_empty_parts_list_returns_none(self):
-        event = {"result": {"parts": []}}
-        assert self.fn(event) is None
-
-    def test_parts_with_all_empty_text_returns_none(self):
-        event = {"result": {"parts": [{"kind": "text", "text": ""}, {"kind": "text", "text": ""}]}}
-        assert self.fn(event) is None
-
-    def test_missing_result_key_returns_none(self):
-        assert self.fn({}) is None
-        assert self.fn({"jsonrpc": "2.0"}) is None
+    def test_task_status_update_returns_none(self):
+        assert self.fn(_status_response()) is None
 
     def test_error_response_returns_none(self):
-        event = {"jsonrpc": "2.0", "id": "1", "error": {"code": -32600, "message": "bad request"}}
-        assert self.fn(event) is None
+        assert self.fn(_error_response()) is None
+
+    def test_empty_parts_returns_none(self):
+        msg = Message(role=Role.agent, message_id=str(_uuid.uuid4()), parts=[])
+        resp = SendStreamingMessageResponse(
+            root=SendStreamingMessageSuccessResponse(id="1", result=msg)
+        )
+        assert self.fn(resp) is None
+
+    def test_empty_text_parts_returns_none(self):
+        msg = Message(
+            role=Role.agent,
+            message_id=str(_uuid.uuid4()),
+            parts=[Part(root=TextPart(text="")), Part(root=TextPart(text=""))],
+        )
+        resp = SendStreamingMessageResponse(
+            root=SendStreamingMessageSuccessResponse(id="1", result=msg)
+        )
+        assert self.fn(resp) is None

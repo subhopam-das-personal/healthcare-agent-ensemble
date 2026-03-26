@@ -1,5 +1,6 @@
 """CDS UI Server — FastAPI + SSE streaming frontend for the A2A agent."""
 
+import base64
 import json
 import logging
 import os
@@ -16,6 +17,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
+from a2a.client import A2AClient
+from a2a.client.helpers import create_text_message_object
+from a2a.types import (
+    Message,
+    MessageSendParams,
+    SendStreamingMessageRequest,
+    SendStreamingMessageSuccessResponse,
+    TaskStatusUpdateEvent,
+    TextPart,
+    Part,
+    Role,
+)
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 logging.basicConfig(level=logging.INFO)
@@ -23,16 +37,18 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 PORT = int(os.environ.get("PORT", os.environ.get("UI_PORT", 7000)))
+
+
 def _resolve_a2a_url() -> str:
     url = os.environ.get("A2A_AGENT_URL")
     if url:
         return url
-    # Railway injects the service hostname without a scheme
     host = os.environ.get("RAILWAY_SERVICE_A2A_AGENT_URL")
     if host:
         scheme = "https" if "railway.app" in host else "http"
         return f"{scheme}://{host}"
     return "http://localhost:9999"
+
 
 A2A_AGENT_URL = _resolve_a2a_url()
 
@@ -40,18 +56,30 @@ app = FastAPI(title="CDS UI")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
-def _a2a_text_from_event(event_data: dict) -> str | None:
-    """Extract streamed text from an A2A SSE event (Message events only)."""
-    result = event_data.get("result", {})
-    # Message event has "parts" at top level; TaskStatusUpdateEvent has "status"
-    parts = result.get("parts")
-    if not parts:
+def _text_from_a2a_event(response) -> str | None:
+    """Extract streamed text from a typed A2A SDK response (Message events only)."""
+    if not isinstance(response.root, SendStreamingMessageSuccessResponse):
         return None
-    for part in parts:
-        text = part.get("text", "")
-        if text:
-            return text
+    result = response.root.result
+    if not isinstance(result, Message):
+        return None
+    for part in result.parts:
+        inner = part.root if hasattr(part, "root") else part
+        if isinstance(inner, TextPart) and inner.text:
+            return inner.text
     return None
+
+
+def _build_stream_request(params: dict) -> SendStreamingMessageRequest:
+    msg = Message(
+        role=Role.user,
+        message_id=str(uuid.uuid4()),
+        parts=[Part(root=TextPart(text=json.dumps(params)))],
+    )
+    return SendStreamingMessageRequest(
+        id=str(uuid.uuid4()),
+        params=MessageSendParams(message=msg),
+    )
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -83,59 +111,19 @@ async def stream(
         "proposed_medications": proposed_medications,
     }
 
-    payload = {
-        "jsonrpc": "2.0",
-        "id": str(uuid.uuid4()),
-        "method": "message/stream",
-        "params": {
-            "message": {
-                "role": "user",
-                "messageId": str(uuid.uuid4()),
-                "parts": [{"kind": "text", "text": json.dumps(params)}],
-            }
-        },
-    }
+    stream_request = _build_stream_request(params)
 
     async def event_gen():
         try:
-            async with httpx.AsyncClient(timeout=300) as client:
-                async with client.stream(
-                    "POST",
-                    A2A_AGENT_URL,
-                    json=payload,
-                    headers={"Accept": "text/event-stream", "Content-Type": "application/json"},
-                ) as resp:
-                    if resp.status_code != 200:
-                        err = await resp.aread()
-                        yield {"data": f"\n\n**Error:** A2A agent returned {resp.status_code}: {err[:200].decode(errors='replace')}"}
+            async with httpx.AsyncClient(timeout=300) as http_client:
+                a2a = A2AClient(httpx_client=http_client, url=A2A_AGENT_URL)
+                async for response in a2a.send_message_streaming(stream_request):
+                    if await request.is_disconnected():
                         return
-
-                    line_count = 0
-                    async for line in resp.aiter_lines():
-                        if await request.is_disconnected():
-                            return
-                        # Log first 20 lines to diagnose SSE format
-                        if line_count < 20:
-                            logger.info(f"[A2A SSE line {line_count}] {line[:200]!r}")
-                        line_count += 1
-                        if not line.startswith("data:"):
-                            continue
-                        raw = line[5:].strip()
-                        if not raw or raw == "[DONE]":
-                            continue
-                        try:
-                            event_data = json.loads(raw)
-                        except json.JSONDecodeError:
-                            logger.warning(f"[A2A SSE] non-JSON data: {raw[:100]!r}")
-                            continue
-                        text = _a2a_text_from_event(event_data)
-                        if line_count <= 20:
-                            logger.info(f"[A2A SSE] extracted text: {text!r}")
-                        if text:
-                            yield {"data": text}
-                    logger.info(f"[A2A SSE] stream ended after {line_count} lines")
-        except httpx.ConnectError as e:
-            logger.error(f"Cannot connect to A2A agent at {A2A_AGENT_URL}: {e}")
+                    text = _text_from_a2a_event(response)
+                    if text:
+                        yield {"data": text}
+        except httpx.ConnectError:
             yield {"data": f"\n\n**Error:** Cannot connect to A2A agent at {A2A_AGENT_URL}"}
         except Exception as e:
             logger.error(f"A2A stream error: {e}", exc_info=True)
@@ -155,7 +143,6 @@ async def chat(
     if not question.strip():
         return JSONResponse({"error": "question is required"}, status_code=400)
 
-    import base64
     try:
         prior = base64.b64decode(context).decode("utf-8") if context else ""
     except Exception:
