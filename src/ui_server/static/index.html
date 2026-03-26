@@ -409,7 +409,8 @@ function runAnalysis() {
   es.onerror = () => {
     es.close();
     currentES = null;
-    finalizeStream(true);
+    // Natural SSE stream close fires onerror in browsers; treat as success if content arrived
+    finalizeStream(sectionOrder.length === 0);
   };
 
   es.addEventListener('close', () => {
@@ -519,6 +520,11 @@ function updateStreamingCard(sectionName) {
 
 // ── Finalize one section card ─────────────────────────────────────────────────
 function finalizeSection(sectionName) {
+  // Cancel any pending debounced streaming update to prevent it overwriting final render
+  if (_streamTickMap[sectionName]) {
+    clearTimeout(_streamTickMap[sectionName]);
+    delete _streamTickMap[sectionName];
+  }
   const cfg = SECTION_CONFIG[sectionName];
   const body = document.getElementById(`${cfg.id}-body`);
   if (!body) return;
