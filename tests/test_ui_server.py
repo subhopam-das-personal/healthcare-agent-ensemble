@@ -69,8 +69,8 @@ class TestResolveA2aUrl:
 
 import uuid as _uuid
 from a2a.types import (
-    Message, Part, TextPart, Role, Task, TaskState, TaskStatus,
-    TaskStatusUpdateEvent, SendStreamingMessageResponse,
+    Artifact, Message, Part, TextPart, Role, Task, TaskState, TaskStatus,
+    TaskArtifactUpdateEvent, TaskStatusUpdateEvent, SendStreamingMessageResponse,
     SendStreamingMessageSuccessResponse, JSONRPCErrorResponse,
     JSONRPCError,
 )
@@ -98,6 +98,21 @@ def _status_response() -> SendStreamingMessageResponse:
         context_id=str(_uuid.uuid4()),
         status=TaskStatus(state=TaskState.working, message=status_msg),
         final=False,
+    )
+    return SendStreamingMessageResponse(
+        root=SendStreamingMessageSuccessResponse(id="1", result=event)
+    )
+
+
+def _artifact_response(text: str, append: bool = False) -> SendStreamingMessageResponse:
+    event = TaskArtifactUpdateEvent(
+        task_id=str(_uuid.uuid4()),
+        context_id=str(_uuid.uuid4()),
+        artifact=Artifact(
+            artifact_id=str(_uuid.uuid4()),
+            parts=[Part(root=TextPart(text=text))],
+        ),
+        append=append,
     )
     return SendStreamingMessageResponse(
         root=SendStreamingMessageSuccessResponse(id="1", result=event)
@@ -155,5 +170,25 @@ class TestTextFromA2aEvent:
         )
         resp = SendStreamingMessageResponse(
             root=SendStreamingMessageSuccessResponse(id="1", result=msg)
+        )
+        assert self.fn(resp) is None
+
+    def test_artifact_event_returns_text(self):
+        assert self.fn(_artifact_response("## Differential Diagnosis\n\n")) == "## Differential Diagnosis\n\n"
+
+    def test_artifact_event_append_chunk_returns_text(self):
+        assert self.fn(_artifact_response("token chunk", append=True)) == "token chunk"
+
+    def test_artifact_event_empty_text_returns_none(self):
+        event = TaskArtifactUpdateEvent(
+            task_id=str(_uuid.uuid4()),
+            context_id=str(_uuid.uuid4()),
+            artifact=Artifact(
+                artifact_id=str(_uuid.uuid4()),
+                parts=[Part(root=TextPart(text=""))],
+            ),
+        )
+        resp = SendStreamingMessageResponse(
+            root=SendStreamingMessageSuccessResponse(id="1", result=event)
         )
         assert self.fn(resp) is None

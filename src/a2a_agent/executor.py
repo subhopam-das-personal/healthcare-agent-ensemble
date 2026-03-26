@@ -3,11 +3,12 @@
 import json
 import logging
 import re
+import uuid
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
-from a2a.types import TaskState
+from a2a.types import Part, TaskState, TextPart
 from a2a.utils import new_agent_text_message, new_task
 
 import sys, os
@@ -215,32 +216,54 @@ class CDSAgentExecutor(AgentExecutor):
         # Step 3: Stream differential diagnosis
         await updater.update_status(TaskState.working,
             message=_status_msg("Step 3/4: Streaming differential diagnosis..."))
-        await event_queue.enqueue_event(new_agent_text_message("\n## Differential Diagnosis\n\n"))
+
+        artifact_id = str(uuid.uuid4())
+        await updater.add_artifact(
+            parts=[Part(root=TextPart(text="\n## Differential Diagnosis\n\n"))],
+            artifact_id=artifact_id, append=False, last_chunk=False,
+        )
 
         ddx_text = ""
         async for chunk in stream_ddx_tokens(patient_data, params.get("symptoms", "")):
             ddx_text += chunk
-            await event_queue.enqueue_event(new_agent_text_message(chunk))
+            await updater.add_artifact(
+                parts=[Part(root=TextPart(text=chunk))],
+                artifact_id=artifact_id, append=True, last_chunk=False,
+            )
         ddx_results = _parse_json_text(ddx_text)
 
         # Stream drug interactions
-        await event_queue.enqueue_event(new_agent_text_message("\n\n## Drug Interaction Analysis\n\n"))
         proposed = [m.strip() for m in params.get("proposed_medications", "").split(",")
                     if m.strip()] if params.get("proposed_medications") else None
+        await updater.add_artifact(
+            parts=[Part(root=TextPart(text="\n\n## Drug Interaction Analysis\n\n"))],
+            artifact_id=artifact_id, append=True, last_chunk=False,
+        )
 
         drug_text = ""
         async for chunk in stream_drug_interaction_tokens(patient_data, rxnav_results, proposed):
             drug_text += chunk
-            await event_queue.enqueue_event(new_agent_text_message(chunk))
+            await updater.add_artifact(
+                parts=[Part(root=TextPart(text=chunk))],
+                artifact_id=artifact_id, append=True, last_chunk=False,
+            )
         interaction_results = _parse_json_text(drug_text)
 
         # Step 4: Stream integrated synthesis
         await updater.update_status(TaskState.working,
             message=_status_msg("Step 4/4: Streaming integrated clinical assessment..."))
-        await event_queue.enqueue_event(new_agent_text_message("\n\n## Integrated Clinical Assessment\n\n"))
+        await updater.add_artifact(
+            parts=[Part(root=TextPart(text="\n\n## Integrated Clinical Assessment\n\n"))],
+            artifact_id=artifact_id, append=True, last_chunk=False,
+        )
 
+        synthesis_chunks = []
         async for chunk in stream_synthesis_tokens(patient_data, ddx_results, interaction_results):
-            await event_queue.enqueue_event(new_agent_text_message(chunk))
+            synthesis_chunks.append(chunk)
+            await updater.add_artifact(
+                parts=[Part(root=TextPart(text=chunk))],
+                artifact_id=artifact_id, append=True, last_chunk=False,
+            )
 
         await updater.complete()
 
@@ -260,9 +283,12 @@ class CDSAgentExecutor(AgentExecutor):
 
         medications = patient_data.get("medications", [])
         if not medications:
-            await event_queue.enqueue_event(new_agent_text_message(
-                json.dumps({"interactions": [], "note": "No medications found.", "overall_risk_level": "N/A"}, indent=2)
-            ))
+            artifact_id = str(uuid.uuid4())
+            no_med_text = json.dumps({"interactions": [], "note": "No medications found.", "overall_risk_level": "N/A"}, indent=2)
+            await updater.add_artifact(
+                parts=[Part(root=TextPart(text=no_med_text))],
+                artifact_id=artifact_id, append=False, last_chunk=True,
+            )
             await updater.complete()
             return
 
@@ -275,10 +301,18 @@ class CDSAgentExecutor(AgentExecutor):
 
         await updater.update_status(TaskState.working,
             message=_status_msg("Streaming drug interaction analysis..."))
-        await event_queue.enqueue_event(new_agent_text_message("\n## Drug Interaction Analysis\n\n"))
+
+        artifact_id = str(uuid.uuid4())
+        await updater.add_artifact(
+            parts=[Part(root=TextPart(text="\n## Drug Interaction Analysis\n\n"))],
+            artifact_id=artifact_id, append=False, last_chunk=False,
+        )
 
         async for chunk in stream_drug_interaction_tokens(patient_data, rxnav_results, proposed):
-            await event_queue.enqueue_event(new_agent_text_message(chunk))
+            await updater.add_artifact(
+                parts=[Part(root=TextPart(text=chunk))],
+                artifact_id=artifact_id, append=True, last_chunk=False,
+            )
 
         await updater.complete()
 
@@ -303,10 +337,18 @@ class CDSAgentExecutor(AgentExecutor):
 
         await updater.update_status(TaskState.working,
             message=_status_msg("Streaming differential diagnosis..."))
-        await event_queue.enqueue_event(new_agent_text_message("\n## Differential Diagnosis\n\n"))
+
+        artifact_id = str(uuid.uuid4())
+        await updater.add_artifact(
+            parts=[Part(root=TextPart(text="\n## Differential Diagnosis\n\n"))],
+            artifact_id=artifact_id, append=False, last_chunk=False,
+        )
 
         async for chunk in stream_ddx_tokens(patient_data, params.get("symptoms", "")):
-            await event_queue.enqueue_event(new_agent_text_message(chunk))
+            await updater.add_artifact(
+                parts=[Part(root=TextPart(text=chunk))],
+                artifact_id=artifact_id, append=True, last_chunk=False,
+            )
 
         await updater.complete()
 

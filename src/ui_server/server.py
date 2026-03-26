@@ -24,6 +24,7 @@ from a2a.types import (
     MessageSendParams,
     SendStreamingMessageRequest,
     SendStreamingMessageSuccessResponse,
+    TaskArtifactUpdateEvent,
     TaskStatusUpdateEvent,
     TextPart,
     Part,
@@ -57,16 +58,24 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 
 def _text_from_a2a_event(response) -> str | None:
-    """Extract streamed text from a typed A2A SDK response (Message events only)."""
+    """Extract streamed text from a typed A2A SDK response.
+
+    Handles both TaskArtifactUpdateEvent (streaming chunks) and Message events.
+    """
     if not isinstance(response.root, SendStreamingMessageSuccessResponse):
         return None
     result = response.root.result
-    if not isinstance(result, Message):
+    if isinstance(result, TaskArtifactUpdateEvent):
+        for part in result.artifact.parts:
+            inner = part.root if hasattr(part, "root") else part
+            if isinstance(inner, TextPart) and inner.text:
+                return inner.text
         return None
-    for part in result.parts:
-        inner = part.root if hasattr(part, "root") else part
-        if isinstance(inner, TextPart) and inner.text:
-            return inner.text
+    if isinstance(result, Message):
+        for part in result.parts:
+            inner = part.root if hasattr(part, "root") else part
+            if isinstance(inner, TextPart) and inner.text:
+                return inner.text
     return None
 
 
