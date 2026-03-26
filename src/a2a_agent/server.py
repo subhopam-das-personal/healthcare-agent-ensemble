@@ -110,7 +110,8 @@ class RobustRequestHandler(DefaultRequestHandler):
         self, params: MessageSendParams, context: ServerCallContext | None = None
     ) -> AsyncGenerator[Union[Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent], None]:
         self._ensure_task_id(params)
-        return super().on_message_send_stream(params, context)
+        async for event in super().on_message_send_stream(params, context):
+            yield event
 
 
 def create_app():
