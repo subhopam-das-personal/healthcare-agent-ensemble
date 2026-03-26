@@ -81,8 +81,10 @@ class _FakePart:
 class _FakeMessage:
     def __init__(self, text: str):
         self.parts = [_FakePart(text)]
+        self.role = "user"
         self.task_id = None
         self.context_id = None
+        self.message_id = None
 
 class _FakeContext:
     def __init__(self, params: dict):
