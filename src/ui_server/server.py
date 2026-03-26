@@ -157,6 +157,51 @@ async def stream(
     return EventSourceResponse(event_gen())
 
 
+@app.get("/chat")
+async def chat(
+    request: Request,
+    question: str = "",
+    patient_id: str = "",
+    context: str = "",
+):
+    """Follow-up chat: stream a Claude answer given prior analysis context."""
+    if not question.strip():
+        return JSONResponse({"error": "question is required"}, status_code=400)
+
+    import base64
+    try:
+        prior = base64.b64decode(context).decode("utf-8") if context else ""
+    except Exception:
+        prior = ""
+
+    system = (
+        "You are a clinical decision support assistant. "
+        "A clinician has just reviewed an AI-generated analysis for a patient and has a follow-up question. "
+        "Answer concisely and clinically. Always remind the user that AI outputs require review by a licensed provider."
+    )
+    user_msg = f"Patient ID: {patient_id}\n\nPrior analysis summary:\n{prior[:4000]}\n\nFollow-up question: {question}"
+
+    async def event_gen():
+        try:
+            from shared.claude_client import get_async_client, CLAUDE_MODEL
+            client = get_async_client()
+            async with client.messages.stream(
+                model=CLAUDE_MODEL,
+                max_tokens=1024,
+                system=system,
+                messages=[{"role": "user", "content": user_msg}],
+            ) as stream:
+                async for chunk in stream.text_stream:
+                    if await request.is_disconnected():
+                        return
+                    yield {"data": chunk}
+        except Exception as e:
+            logger.error(f"Chat error: {e}", exc_info=True)
+            yield {"data": f"\n\n**Error:** {e}"}
+
+    return EventSourceResponse(event_gen())
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}

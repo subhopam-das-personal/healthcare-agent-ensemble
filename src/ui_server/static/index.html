@@ -153,6 +153,35 @@
 
   /* Disclaimer */
   .disclaimer { font-size: 11px; color: #aaa; text-align: center; padding: 12px 24px; border-top: 1px solid #eee; background: #fff; flex-shrink: 0; }
+
+  /* ── Agent step tracker ─────────────────────────────────────── */
+  .agent-tracker { background: #fff; border: 1px solid #e0e3ea; border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .tracker-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #888; margin-bottom: 2px; }
+  .tracker-step { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #555; padding: 3px 0; transition: color 0.2s; }
+  .tracker-step.done { color: #2e7d32; }
+  .tracker-step.active { color: #0f4c81; font-weight: 600; }
+  .tracker-step.pending { color: #ccc; }
+  .step-icon { width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; flex-shrink: 0; }
+  .step-icon.done { background: #e8f5e9; color: #2e7d32; }
+  .step-icon.active { background: #e8f0fe; color: #0f4c81; animation: pulse 1.2s infinite; }
+  .step-icon.pending { background: #f5f5f5; color: #ccc; }
+  .step-connector { width: 1px; height: 10px; background: #e8ecf0; margin-left: 8px; }
+
+  /* ── Follow-up chat ─────────────────────────────────────────── */
+  .chat-panel { border-top: 1px solid #e0e3ea; background: #fff; padding: 14px 24px; flex-shrink: 0; display: none; flex-direction: column; gap: 10px; max-height: 320px; }
+  .chat-panel.visible { display: flex; }
+  .chat-history { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; max-height: 180px; }
+  .chat-bubble { border-radius: 10px; padding: 8px 12px; font-size: 13px; line-height: 1.5; max-width: 85%; }
+  .chat-bubble.user { background: #0f4c81; color: #fff; align-self: flex-end; }
+  .chat-bubble.ai { background: #f5f7fa; color: #333; align-self: flex-start; border: 1px solid #e8ecf0; }
+  .chat-bubble.ai.streaming { border-color: #b3c7ee; }
+  .chat-input-row { display: flex; gap: 8px; }
+  .chat-input { flex: 1; border: 1px solid #d0d5dd; border-radius: 8px; padding: 9px 12px; font-size: 13px; font-family: inherit; resize: none; height: 38px; line-height: 1.4; }
+  .chat-input:focus { outline: 2px solid #0f4c81; border-color: transparent; }
+  .chat-send-btn { background: #0f4c81; color: #fff; border: none; border-radius: 8px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .chat-send-btn:hover:not(:disabled) { background: #0a3a63; }
+  .chat-send-btn:disabled { background: #9bb5d4; cursor: not-allowed; }
+  .chat-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #888; }
 </style>
 </head>
 <body>
@@ -231,6 +260,16 @@
       </div>
     </div>
 
+    <!-- Follow-up chat panel -->
+    <div class="chat-panel" id="chat-panel">
+      <div class="chat-label">Follow-up</div>
+      <div class="chat-history" id="chat-history"></div>
+      <div class="chat-input-row">
+        <textarea class="chat-input" id="chat-input" placeholder="Ask a follow-up question about this patient…" rows="1"></textarea>
+        <button class="chat-send-btn" id="chat-send-btn" onclick="sendChat()">Ask</button>
+      </div>
+    </div>
+
     <div class="disclaimer">
       ⚠ AI outputs require review by a licensed clinician before clinical use. This tool is for decision support only.
     </div>
@@ -242,11 +281,41 @@
 let activeSkill = 'comprehensive-clinical-review';
 let currentES = null;
 let history = [];
+let analysisContext = ''; // base64-encoded prior analysis for chat
 
 // Per-stream buffers
 let sections = {};
 let currentSection = null;
 let sectionOrder = [];
+
+// ── Step tracker config ───────────────────────────────────────────────────────
+const SKILL_STEPS = {
+  'comprehensive-clinical-review': [
+    { id: 'fhir',  label: 'Fetching patient FHIR record' },
+    { id: 'rxnav', label: 'Resolving medications via RxNav' },
+    { id: 'ddx',   label: 'Differential Diagnosis (Claude)' },
+    { id: 'drug',  label: 'Drug Interaction Analysis (Claude)' },
+    { id: 'synth', label: 'Integrated Clinical Assessment (Claude)' },
+  ],
+  'differential-diagnosis': [
+    { id: 'fhir', label: 'Fetching patient FHIR record' },
+    { id: 'ddx',  label: 'Differential Diagnosis (Claude)' },
+  ],
+  'quick-drug-check': [
+    { id: 'fhir',  label: 'Fetching patient FHIR record' },
+    { id: 'rxnav', label: 'Resolving medications via RxNav' },
+    { id: 'drug',  label: 'Drug Interaction Analysis (Claude)' },
+  ],
+};
+
+const SECTION_TO_STEP = {
+  'Differential Diagnosis':           'ddx',
+  'Drug Interaction Analysis':        'drug',
+  'Integrated Clinical Assessment':   'synth',
+};
+
+let trackerSteps = [];
+let trackerActiveIdx = 0;
 
 // ── Skill pill selection ──────────────────────────────────────────────────────
 document.querySelectorAll('.pill').forEach(pill => {
@@ -300,9 +369,19 @@ function runAnalysis() {
   document.getElementById('run-btn').disabled = true;
   document.getElementById('run-btn-label').textContent = 'Running…';
   document.getElementById('empty-state')?.remove();
+  document.getElementById('chat-panel').classList.remove('visible');
+  document.getElementById('chat-history').innerHTML = '';
+  analysisContext = '';
 
   const output = document.getElementById('output-scroll');
   output.innerHTML = '';
+
+  // Build and insert step tracker
+  trackerSteps = (SKILL_STEPS[activeSkill] || SKILL_STEPS['comprehensive-clinical-review']).map(s => ({...s, state: 'pending'}));
+  trackerActiveIdx = 0;
+  output.appendChild(buildTracker());
+  // Mark FHIR as active immediately
+  setTrackerStep('fhir', 'active');
 
   // Header info
   document.getElementById('hdr-patient-name').textContent = patientId.substring(0, 8) + '…';
@@ -367,6 +446,12 @@ function processChunk(chunk) {
       const patientId = document.getElementById('patient-id').value.trim();
       document.getElementById('hdr-patient-name').textContent = patientId;
       document.getElementById('hdr-patient-meta').textContent = `Running ${skillLabel(activeSkill)}…`;
+
+      // Advance tracker: mark fhir+rxnav done, mark this section active
+      setTrackerStep('fhir', 'done');
+      setTrackerStep('rxnav', 'done');
+      const stepId = SECTION_TO_STEP[header];
+      if (stepId) setTrackerStep(stepId, 'active');
       return;
     }
   }
@@ -487,7 +572,12 @@ function finalizeStream(isError) {
   // Add to history
   if (!isError && sectionOrder.length > 0) {
     addToHistory(patientId, activeSkill);
+    // Build context for follow-up chat
+    const raw = Object.entries(sections).map(([k,v]) => `## ${k}\n${v}`).join('\n\n');
+    try { analysisContext = btoa(unescape(encodeURIComponent(raw.slice(0, 6000)))); } catch(_) {}
+    document.getElementById('chat-panel').classList.add('visible');
   }
+  finalizeTracker();
 }
 
 // ── Red flag bar ──────────────────────────────────────────────────────────────
@@ -721,6 +811,101 @@ function escHtml(s) {
   if (s == null) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+// ── Step tracker helpers ──────────────────────────────────────────────────────
+function buildTracker() {
+  const el = document.createElement('div');
+  el.className = 'agent-tracker';
+  el.id = 'agent-tracker';
+  el.innerHTML = `<div class="tracker-title">Agent Activity</div>` +
+    trackerSteps.map((s, i) => `
+      <div class="tracker-step pending" id="step-${s.id}">
+        <div class="step-icon pending" id="step-icon-${s.id}">○</div>
+        <span>${s.label}</span>
+      </div>`).join('');
+  return el;
+}
+
+function setTrackerStep(id, state) {
+  const step = document.getElementById(`step-${id}`);
+  const icon = document.getElementById(`step-icon-${id}`);
+  if (!step || !icon) return;
+  step.className = `tracker-step ${state}`;
+  icon.className = `step-icon ${state}`;
+  icon.textContent = state === 'done' ? '✓' : state === 'active' ? '⟳' : '○';
+}
+
+function finalizeTracker() {
+  trackerSteps.forEach(s => setTrackerStep(s.id, 'done'));
+  // Collapse tracker after 2s
+  setTimeout(() => {
+    const t = document.getElementById('agent-tracker');
+    if (t) t.style.opacity = '0.4';
+  }, 2000);
+}
+
+// ── Chat helpers ──────────────────────────────────────────────────────────────
+function sendChat() {
+  const input = document.getElementById('chat-input');
+  const question = input.value.trim();
+  if (!question) return;
+
+  const history = document.getElementById('chat-history');
+  const sendBtn = document.getElementById('chat-send-btn');
+
+  // Add user bubble
+  const userBubble = document.createElement('div');
+  userBubble.className = 'chat-bubble user';
+  userBubble.textContent = question;
+  history.appendChild(userBubble);
+  history.scrollTop = history.scrollHeight;
+
+  input.value = '';
+  sendBtn.disabled = true;
+
+  // Add AI bubble
+  const aiBubble = document.createElement('div');
+  aiBubble.className = 'chat-bubble ai streaming';
+  aiBubble.textContent = '';
+  history.appendChild(aiBubble);
+
+  const patientId = document.getElementById('patient-id').value.trim();
+  const params = new URLSearchParams({
+    question,
+    patient_id: patientId,
+    context: analysisContext,
+  });
+
+  const es = new EventSource(`/chat?${params}`);
+  es.onmessage = (evt) => {
+    aiBubble.textContent += evt.data;
+    history.scrollTop = history.scrollHeight;
+  };
+  es.onerror = () => {
+    es.close();
+    aiBubble.classList.remove('streaming');
+    sendBtn.disabled = false;
+  };
+  es.addEventListener('close', () => {
+    es.close();
+    aiBubble.classList.remove('streaming');
+    sendBtn.disabled = false;
+  });
+
+  // Poll for close
+  const poll = setInterval(() => {
+    if (es.readyState === 2) {
+      clearInterval(poll);
+      aiBubble.classList.remove('streaming');
+      sendBtn.disabled = false;
+    }
+  }, 400);
+}
+
+// Enter key sends chat
+document.getElementById('chat-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+});
 
 // Handle SSE stream completion via readyState polling (browsers vary)
 setInterval(() => {
