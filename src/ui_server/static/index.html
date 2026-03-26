@@ -287,6 +287,7 @@ let analysisContext = ''; // base64-encoded prior analysis for chat
 let sections = {};
 let currentSection = null;
 let sectionOrder = [];
+let agentErrorText = null; // error message forwarded by server before any section
 
 // ── Step tracker config ───────────────────────────────────────────────────────
 const SKILL_STEPS = {
@@ -363,6 +364,7 @@ function runAnalysis() {
   sections = {};
   currentSection = null;
   sectionOrder = [];
+  agentErrorText = null;
 
   // UI reset
   setStatus('streaming', '● Streaming');
@@ -462,6 +464,10 @@ function processChunk(chunk) {
     sections[currentSection] += chunk;
     // Update streaming cursor feedback
     updateStreamingCard(currentSection);
+  } else if (chunk.includes('**Error:**')) {
+    // Error message arrived before any section — store as a virtual section so
+    // finalizeStream can show it in the error card instead of a generic message
+    agentErrorText = (agentErrorText || '') + chunk;
   }
 }
 
@@ -548,7 +554,10 @@ function finalizeStream(isError) {
 
   if (isError && sectionOrder.length === 0) {
     const output = document.getElementById('output-scroll');
-    output.innerHTML = `<div class="error-card">⚠ Analysis failed. Check the patient ID is valid and the server is reachable.</div>`;
+    const errMsg = agentErrorText
+      ? agentErrorText.replace(/^\s*\*\*Error:\*\*\s*/i, '').trim()
+      : 'Analysis failed. Check the patient ID is valid and the server is reachable.';
+    output.innerHTML = `<div class="error-card">⚠ ${escHtml(errMsg)}</div>`;
   }
 
   // Check red flags from DDx
