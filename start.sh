@@ -7,7 +7,11 @@ SERVICE="${RAILWAY_SERVICE_NAME:-}"
 
 if [ "$SERVICE" = "ui-server" ]; then
   echo "Starting UI server (service: $SERVICE)"
-  exec python src/ui_server/server.py
+  exec streamlit run src/ui_server/app.py \
+    --server.port "${PORT:-7000}" \
+    --server.address 0.0.0.0 \
+    --server.headless true \
+    --browser.gatherUsageStats false
 elif [ "$SERVICE" = "a2a-agent" ]; then
   echo "Starting A2A agent (service: $SERVICE)"
   exec python src/a2a_agent/server.py
