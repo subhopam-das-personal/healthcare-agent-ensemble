@@ -223,8 +223,16 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-[data-testid="stSidebar"] { background: #fff; border-right: 1px solid #e0e3ea; }
-.stExpander { border: 1px solid #e0e3ea !important; border-radius: 8px !important; }
+/* Use Streamlit's own CSS vars so colors follow the active theme automatically */
+[data-testid="stSidebar"] {
+    border-right: 1px solid rgba(128,128,128,0.2);
+}
+.stExpander {
+    border: 1px solid rgba(128,128,128,0.25) !important;
+    border-radius: 8px !important;
+}
+/* Ensure dataframe text is readable in both themes */
+[data-testid="stDataFrame"] { border-radius: 6px; overflow: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
