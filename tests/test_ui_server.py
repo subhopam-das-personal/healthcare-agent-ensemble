@@ -1,25 +1,84 @@
-"""Tests for ui_server/server.py — event parsing and URL resolution."""
+"""Tests for ui_server/app.py — event parsing and URL resolution."""
 
 import sys, os
-import importlib
 import types
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
-# ── Import helpers (avoid loading FastAPI app at module level) ────────────────
+# ── Streamlit stub (must be installed before app.py is imported) ──────────────
+
+class _AttrDict(dict):
+    """Dict that also supports attribute get/set (mirrors Streamlit session_state)."""
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError:
+            raise AttributeError(key)
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
+    def __contains__(self, item):
+        return super().__contains__(item)
+
+
+class _CtxMgr:
+    """Minimal context manager stub for `with st.sidebar:` etc."""
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def __call__(self, *a, **kw): return self
+
+    def markdown(self, *a, **kw): pass
+    def update(self, *a, **kw): pass
+    def text_input(self, *a, **kw): return ""
+    def text_area(self, *a, **kw): return ""
+    def radio(self, *a, **kw): return None
+    def button(self, *a, **kw): return False
+    def caption(self, *a, **kw): pass
+    def divider(self, *a, **kw): pass
+
+
+def _make_st_stub():
+    st = types.ModuleType("streamlit")
+    st.session_state = _AttrDict()
+    st.set_page_config = lambda **kw: None
+    st.markdown = lambda *a, **kw: None
+    st.info = lambda *a, **kw: None
+    st.error = lambda *a, **kw: None
+    st.warning = lambda *a, **kw: None
+    st.stop = lambda: None
+    st.divider = lambda: None
+    st.text_input = lambda *a, **kw: ""
+    st.text_area = lambda *a, **kw: ""
+    st.radio = lambda *a, **kw: None
+    st.button = lambda *a, **kw: False
+    st.caption = lambda *a, **kw: None
+    st.chat_input = lambda *a, **kw: None
+    st.chat_message = lambda *a, **kw: _CtxMgr()
+    st.status = lambda *a, **kw: _CtxMgr()
+    st.empty = lambda: types.SimpleNamespace(markdown=lambda *a, **kw: None)
+    st.sidebar = _CtxMgr()
+    return st
+
+
+sys.modules.setdefault("streamlit", _make_st_stub())
+
+
+# ── Import helpers ────────────────────────────────────────────────────────────
 
 def _load_ui_server(env_overrides: dict | None = None):
-    """Import server module with optional env overrides, isolated each call."""
+    """Import app module with optional env overrides, isolated each call."""
     env_overrides = env_overrides or {}
     saved = {k: os.environ.get(k) for k in env_overrides}
     os.environ.update(env_overrides)
     # Force reimport so _resolve_a2a_url() re-runs with new env
-    if "ui_server.server" in sys.modules:
-        del sys.modules["ui_server.server"]
+    for mod in list(sys.modules):
+        if mod.startswith("ui_server"):
+            del sys.modules[mod]
     try:
-        import ui_server.server as m
+        import ui_server.app as m
         return m
     finally:
         for k, v in saved.items():

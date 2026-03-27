@@ -51,6 +51,7 @@ SKILL_STEPS = {
     "comprehensive-clinical-review": [
         "Fetching patient FHIR record",
         "Resolving medications via RxNav",
+        "Matching clinical trials",
         "Differential Diagnosis (Claude)",
         "Drug Interaction Analysis (Claude)",
         "Integrated Clinical Assessment (Claude)",
@@ -67,6 +68,7 @@ SKILL_STEPS = {
 }
 
 SECTION_HEADERS = [
+    "Clinical Trials",
     "Differential Diagnosis",
     "Drug Interaction Analysis",
     "Integrated Clinical Assessment",
@@ -110,6 +112,49 @@ def _text_from_a2a_event(response: SendStreamingMessageResponse) -> str | None:
 
 
 # ── Rendering helpers ─────────────────────────────────────────────────────────
+
+def _render_trials(trials: list) -> None:
+    if not trials:
+        st.info("No recruiting trials found matching this patient's conditions.")
+        return
+    for trial in trials:
+        phase = trial.get("phase", "N/A")
+        status = trial.get("status", "")
+        status_badge = "🟢" if status == "RECRUITING" else "⚪"
+        nct_id = trial.get("nct_id", "")
+        title = trial.get("title", nct_id)
+        with st.expander(f"{status_badge} {nct_id} — {title}", expanded=False):
+            cols = st.columns(3)
+            cols[0].metric("Phase", phase)
+            cols[1].metric("Status", status)
+            cols[2].metric("Sponsor", trial.get("sponsor", "—")[:30])
+
+            conditions = trial.get("conditions", [])
+            if conditions:
+                st.caption("**Conditions:** " + " · ".join(conditions[:5]))
+
+            age_range = " – ".join(filter(None, [trial.get("min_age"), trial.get("max_age")]))
+            gender = trial.get("gender", "ALL")
+            if age_range or gender != "ALL":
+                st.caption(f"**Eligibility:** {age_range or 'Any age'} · {gender}")
+
+            locations = trial.get("locations", [])
+            if locations:
+                st.caption("**Sites:** " + " · ".join(locations))
+
+            summary = trial.get("summary", "")
+            if summary:
+                st.write(summary)
+
+            elig = trial.get("eligibility_summary", "")
+            if elig:
+                st.caption("**Eligibility criteria (excerpt):**")
+                st.code(elig[:400], language=None)
+
+            st.markdown(
+                f"[View on ClinicalTrials.gov](https://clinicaltrials.gov/study/{nct_id})"
+            )
+
 
 def _render_ddx(parsed: dict) -> None:
     differentials = parsed.get("differentials", [])
@@ -199,10 +244,21 @@ def _try_render_section(name: str, raw: str) -> None:
                 except (json.JSONDecodeError, IndexError):
                     pass
 
-    icon = {"Differential Diagnosis": "🔬", "Drug Interaction Analysis": "💊",
-             "Integrated Clinical Assessment": "📋"}.get(name, "📄")
+    icon = {
+        "Clinical Trials": "🧪",
+        "Differential Diagnosis": "🔬",
+        "Drug Interaction Analysis": "💊",
+        "Integrated Clinical Assessment": "📋",
+    }.get(name, "📄")
     with st.expander(f"{icon} {name}", expanded=True):
-        if parsed and not parsed.get("raw_response") and not parsed.get("error"):
+        if name == "Clinical Trials":
+            if isinstance(parsed, list):
+                _render_trials(parsed)
+            elif isinstance(parsed, dict) and not parsed.get("error"):
+                _render_trials(parsed.get("trials", []))
+            else:
+                st.markdown(raw)
+        elif isinstance(parsed, dict) and not parsed.get("raw_response") and not parsed.get("error"):
             if name == "Differential Diagnosis":
                 _render_ddx(parsed)
             elif name == "Drug Interaction Analysis":

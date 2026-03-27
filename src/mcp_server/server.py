@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from shared.fhir_client import get_patient_data, DEFAULT_FHIR_BASE_URL
 from shared.claude_client import run_ddx_reasoning, run_drug_interaction_reasoning, run_synthesis
 from shared.rxnav_client import get_interactions, resolve_medications_to_rxcuis
+from shared.trials_client import search_trials_by_conditions, get_trial_details as _get_trial_details
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -344,6 +345,110 @@ async def synthesize_clinical_assessment(
         pass
 
     return out
+
+
+@mcp.tool(meta=_UI_META)
+async def find_matching_trials(
+    patient_id: str,
+    fhir_base_url: str = DEFAULT_FHIR_BASE_URL,
+    access_token: str = "",
+    patient_json: str = "",
+    max_results: int = 5,
+    ctx: Context = None,
+) -> str:
+    """Find recruiting clinical trials matching a patient's conditions and demographics.
+
+    Fetches the patient's FHIR record to extract conditions, age, and gender, then
+    queries ClinicalTrials.gov for open interventional studies. Returns a ranked list
+    of trials with eligibility summaries and site locations.
+
+    Args:
+        patient_id: FHIR Patient resource ID
+        fhir_base_url: FHIR server base URL
+        access_token: SMART on FHIR bearer token (optional)
+        patient_json: Optional pre-fetched patient data JSON (skips FHIR fetch if provided)
+        max_results: Maximum number of trials to return (default 5)
+    """
+    logger.info(f"[find_matching_trials] patient_id={patient_id!r}")
+    try:
+        if ctx:
+            await ctx.info(f"Searching clinical trials for patient {patient_id}")
+    except Exception:
+        pass
+
+    if patient_json:
+        try:
+            patient_data = json.loads(patient_json)
+        except json.JSONDecodeError as e:
+            return json.dumps({"error": f"Invalid patient_json: {e}"}, indent=2)
+    else:
+        token = access_token if access_token else None
+        patient_data = await get_patient_data(patient_id, fhir_base_url, token)
+
+    if "error" in patient_data:
+        return json.dumps({"error": patient_data["error"]}, indent=2)
+
+    conditions = patient_data.get("conditions", [])
+    condition_names = [c.get("display", "") for c in conditions if c.get("display")]
+
+    if not condition_names:
+        return json.dumps({"trials": [], "note": "No conditions found for this patient."}, indent=2)
+
+    # Derive age from birthDate
+    age = None
+    patient = patient_data.get("patient", {})
+    if patient.get("birthDate"):
+        try:
+            from datetime import date
+            birth = date.fromisoformat(patient["birthDate"])
+            age = (date.today() - birth).days // 365
+        except Exception:
+            pass
+
+    gender = patient.get("gender")
+
+    try:
+        if ctx:
+            await ctx.info(f"Querying ClinicalTrials.gov for: {', '.join(condition_names[:3])}")
+    except Exception:
+        pass
+
+    trials = await search_trials_by_conditions(
+        condition_names, age=age, gender=gender, max_results=max_results
+    )
+
+    logger.info(f"[find_matching_trials] Found {len(trials)} trials for patient {patient_id}")
+    try:
+        if ctx:
+            await ctx.info(f"Found {len(trials)} recruiting trial(s) matching patient profile")
+    except Exception:
+        pass
+
+    return json.dumps({"trials": trials, "query_conditions": condition_names[:3]}, indent=2)
+
+
+@mcp.tool(meta=_UI_META)
+async def get_trial_details_tool(
+    nct_id: str,
+    ctx: Context = None,
+) -> str:
+    """Fetch full protocol details for a ClinicalTrials.gov study.
+
+    Returns arms, primary outcomes, full eligibility criteria, site locations,
+    and sponsor information for the specified trial.
+
+    Args:
+        nct_id: ClinicalTrials.gov NCT identifier (e.g. "NCT05123456")
+    """
+    logger.info(f"[get_trial_details_tool] nct_id={nct_id!r}")
+    try:
+        if ctx:
+            await ctx.info(f"Fetching trial details for {nct_id}")
+    except Exception:
+        pass
+
+    result = await _get_trial_details(nct_id)
+    return json.dumps(result, indent=2)
 
 
 if __name__ == "__main__":

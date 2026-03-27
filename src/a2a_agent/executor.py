@@ -20,6 +20,7 @@ from shared.claude_client import (
     stream_drug_interaction_tokens,
     stream_synthesis_tokens,
 )
+from shared.trials_client import search_trials_by_conditions
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +194,7 @@ class CDSAgentExecutor(AgentExecutor):
 
         # Step 1: Fetch patient data
         await updater.update_status(TaskState.working,
-            message=_status_msg("Step 1/4: Fetching patient data from FHIR..."))
+            message=_status_msg("Step 1/5: Fetching patient data from FHIR..."))
 
         patient_data = await self._fetch_patient(patient_id, fhir_base_url, token)
         if "error" in patient_data:
@@ -210,17 +211,46 @@ class CDSAgentExecutor(AgentExecutor):
 
         # Step 2: RxNav drug interaction database lookup
         await updater.update_status(TaskState.working,
-            message=_status_msg("Step 2/4: Looking up drug interaction database..."))
+            message=_status_msg("Step 2/5: Looking up drug interaction database..."))
         rxnav_results = await self._fetch_rxnav(patient_data.get("medications", []))
 
-        # Step 3: Stream differential diagnosis
+        # Step 3: Match clinical trials
         await updater.update_status(TaskState.working,
-            message=_status_msg("Step 3/4: Streaming differential diagnosis..."))
+            message=_status_msg("Step 3/5: Searching for matching clinical trials..."))
 
+        conditions = patient_data.get("conditions", [])
+        condition_names = [c.get("display", "") for c in conditions if c.get("display")]
+        age = None
+        if pt.get("birthDate"):
+            try:
+                from datetime import date as _date
+                birth = _date.fromisoformat(pt["birthDate"])
+                age = (_date.today() - birth).days // 365
+            except Exception:
+                pass
+        gender = pt.get("gender")
+        trials = await search_trials_by_conditions(condition_names, age=age, gender=gender)
+
+        await updater.update_status(TaskState.working, message=_status_msg(
+            f"Found {len(trials)} recruiting trial{'s' if len(trials) != 1 else ''} "
+            f"matching patient profile"
+        ))
+
+        # Start artifact stream with trials section
         artifact_id = str(uuid.uuid4())
+        import json as _json
         await updater.add_artifact(
-            parts=[Part(root=TextPart(text="\n## Differential Diagnosis\n\n"))],
+            parts=[Part(root=TextPart(text="\n## Clinical Trials\n\n" + _json.dumps(trials, indent=2)))],
             artifact_id=artifact_id, append=False, last_chunk=False,
+        )
+
+        # Step 4: Stream differential diagnosis
+        await updater.update_status(TaskState.working,
+            message=_status_msg("Step 4/5: Streaming differential diagnosis..."))
+
+        await updater.add_artifact(
+            parts=[Part(root=TextPart(text="\n\n## Differential Diagnosis\n\n"))],
+            artifact_id=artifact_id, append=True, last_chunk=False,
         )
 
         ddx_text = ""
@@ -249,17 +279,15 @@ class CDSAgentExecutor(AgentExecutor):
             )
         interaction_results = _parse_json_text(drug_text)
 
-        # Step 4: Stream integrated synthesis
+        # Step 5: Stream integrated synthesis
         await updater.update_status(TaskState.working,
-            message=_status_msg("Step 4/4: Streaming integrated clinical assessment..."))
+            message=_status_msg("Step 5/5: Streaming integrated clinical assessment..."))
         await updater.add_artifact(
             parts=[Part(root=TextPart(text="\n\n## Integrated Clinical Assessment\n\n"))],
             artifact_id=artifact_id, append=True, last_chunk=False,
         )
 
-        synthesis_chunks = []
         async for chunk in stream_synthesis_tokens(patient_data, ddx_results, interaction_results):
-            synthesis_chunks.append(chunk)
             await updater.add_artifact(
                 parts=[Part(root=TextPart(text=chunk))],
                 artifact_id=artifact_id, append=True, last_chunk=False,
