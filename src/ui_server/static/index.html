@@ -166,6 +166,12 @@
   .step-icon.active { background: #e8f0fe; color: #0f4c81; animation: pulse 1.2s infinite; }
   .step-icon.pending { background: #f5f5f5; color: #ccc; }
   .step-connector { width: 1px; height: 10px; background: #e8ecf0; margin-left: 8px; }
+  .step-detail { margin-left: 28px; border-left: 2px solid #e8f0fe; padding: 4px 10px; background: #fafcff; font-size: 11px; max-height: 6em; overflow-y: auto; }
+  .narration-line { padding: 1px 0; color: #555; font-family: monospace; line-height: 1.4; }
+  .narration-line.call { color: #0f4c81; }
+  .narration-line.result { color: #2e7d32; }
+  .step-expand-icon { font-size: 10px; color: #aaa; margin-left: auto; user-select: none; cursor: pointer; }
+  .tracker-step.done { cursor: pointer; }
 
   /* ── Follow-up chat ─────────────────────────────────────────── */
   .chat-panel { border-top: 1px solid #e0e3ea; background: #fff; padding: 14px 24px; flex-shrink: 0; display: none; flex-direction: column; gap: 10px; max-height: 320px; }
@@ -387,9 +393,9 @@ function runAnalysis() {
   output.innerHTML = '';
 
   // Build and insert step tracker
-  trackerSteps = (SKILL_STEPS[activeSkill] || SKILL_STEPS['comprehensive-clinical-review']).map(s => ({...s, state: 'pending'}));
+  trackerSteps = (SKILL_STEPS[activeSkill] || SKILL_STEPS['comprehensive-clinical-review']).map(s => ({...s, state: 'pending', narration: [], expanded: false}));
   trackerActiveIdx = 0;
-  output.appendChild(buildTracker());
+  output.appendChild(renderTimeline());
   // Mark FHIR as active immediately
   setTrackerStep('fhir', 'active');
 
@@ -435,6 +441,11 @@ function runAnalysis() {
 
 // ── Chunk processing ──────────────────────────────────────────────────────────
 function processChunk(chunk) {
+  // Route narration events to timeline (status: prefix from server.py)
+  if (chunk.startsWith('status:')) {
+    appendNarrationToActiveStep(chunk.slice(7).trim());
+    return;
+  }
   // Detect section headers in the chunk
   for (const header of SECTION_HEADERS) {
     if (chunk.includes(`## ${header}`)) {
@@ -836,31 +847,88 @@ function escHtml(s) {
 }
 
 // ── Step tracker helpers ──────────────────────────────────────────────────────
-function buildTracker() {
-  const el = document.createElement('div');
-  el.className = 'agent-tracker';
-  el.id = 'agent-tracker';
+function _narrationClass(msg) {
+  if (msg.trimStart().startsWith('→')) return 'call';
+  if (msg.trimStart().startsWith('←')) return 'result';
+  return '';
+}
+
+function renderTimeline() {
+  let el = document.getElementById('agent-tracker');
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'agent-tracker';
+    el.id = 'agent-tracker';
+  }
   el.innerHTML = `<div class="tracker-title">Agent Activity</div>` +
-    trackerSteps.map((s, i) => `
-      <div class="tracker-step pending" id="step-${s.id}">
-        <div class="step-icon pending" id="step-icon-${s.id}">○</div>
-        <span>${s.label}</span>
-      </div>`).join('');
+    trackerSteps.map((s, i) => {
+      const icon = s.state === 'done' ? '✓' : s.state === 'active' ? '⟳' : '○';
+      const canExpand = s.narration.length > 0;
+      const expandIcon = (s.state === 'done' || s.state === 'active') && canExpand
+        ? `<span class="step-expand-icon" data-step-id="${s.id}">${s.expanded ? '▲' : '▼'}</span>` : '';
+      const detailHtml = (s.expanded && canExpand)
+        ? `<div class="step-detail" id="step-detail-${s.id}">` +
+            s.narration.map(line => `<div class="narration-line ${_narrationClass(line)}">${escHtml(line)}</div>`).join('') +
+          `</div>` : '';
+      return `<div class="tracker-step ${s.state}" id="step-${s.id}" data-step-idx="${i}">` +
+        `<div class="step-icon ${s.state}" id="step-icon-${s.id}">${icon}</div>` +
+        `<span>${s.label}</span>${expandIcon}</div>${detailHtml}`;
+    }).join('');
+  el.querySelectorAll('[data-step-id]').forEach(icon => {
+    icon.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = trackerSteps.findIndex(s => s.id === icon.dataset.stepId);
+      if (idx >= 0) { trackerSteps[idx].expanded = !trackerSteps[idx].expanded; renderTimeline(); }
+    });
+  });
   return el;
 }
 
 function setTrackerStep(id, state) {
-  const step = document.getElementById(`step-${id}`);
-  const icon = document.getElementById(`step-icon-${id}`);
-  if (!step || !icon) return;
-  step.className = `tracker-step ${state}`;
-  icon.className = `step-icon ${state}`;
-  icon.textContent = state === 'done' ? '✓' : state === 'active' ? '⟳' : '○';
+  const idx = trackerSteps.findIndex(s => s.id === id);
+  if (idx < 0) return;
+  trackerSteps[idx].state = state;
+  if (state === 'active') { trackerActiveIdx = idx; trackerSteps[idx].expanded = trackerSteps[idx].narration.length > 0; }
+  else if (state === 'done') { trackerSteps[idx].expanded = false; }
+  renderTimeline();
+}
+
+function appendNarrationToActiveStep(msg) {
+  // Advance step if this is a "Step X/Y:" message
+  const stepMatch = msg.match(/Step (\d+)\/\d+:/);
+  if (stepMatch) {
+    const newIdx = parseInt(stepMatch[1]) - 1;
+    if (newIdx >= 0 && newIdx < trackerSteps.length) {
+      if (trackerActiveIdx >= 0 && trackerActiveIdx < trackerSteps.length && trackerSteps[trackerActiveIdx].state === 'active') {
+        trackerSteps[trackerActiveIdx].state = 'done';
+        trackerSteps[trackerActiveIdx].expanded = false;
+      }
+      trackerActiveIdx = newIdx;
+      trackerSteps[newIdx].state = 'active';
+      trackerSteps[newIdx].expanded = true;
+      renderTimeline();
+    }
+  }
+  const step = trackerSteps[trackerActiveIdx >= 0 ? trackerActiveIdx : 0];
+  if (!step) return;
+  step.narration.push(msg);
+  // Targeted DOM update — avoid full re-render on every token
+  const detailEl = document.getElementById(`step-detail-${step.id}`);
+  if (detailEl) {
+    const lineEl = document.createElement('div');
+    lineEl.className = 'narration-line ' + _narrationClass(msg);
+    lineEl.textContent = msg;
+    detailEl.appendChild(lineEl);
+    detailEl.scrollTop = detailEl.scrollHeight;
+  } else {
+    renderTimeline();
+  }
 }
 
 function finalizeTracker() {
-  trackerSteps.forEach(s => setTrackerStep(s.id, 'done'));
-  // Collapse tracker after 2s
+  trackerSteps.forEach(s => { s.state = 'done'; s.expanded = false; });
+  renderTimeline();
+  // Fade tracker after 2s
   setTimeout(() => {
     const t = document.getElementById('agent-tracker');
     if (t) t.style.opacity = '0.4';

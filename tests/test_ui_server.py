@@ -149,8 +149,20 @@ class TestTextFromA2aEvent:
         )
         assert self.fn(resp) == "hello"
 
-    def test_task_status_update_returns_none(self):
-        assert self.fn(_status_response()) is None
+    def test_task_status_update_working_returns_status_prefix(self):
+        assert self.fn(_status_response()) == "status:Step 1/4: Fetching FHIR data..."
+
+    def test_task_status_update_working_empty_message_returns_none(self):
+        event = TaskStatusUpdateEvent(
+            task_id=str(_uuid.uuid4()),
+            context_id=str(_uuid.uuid4()),
+            status=TaskStatus(state=TaskState.working),
+            final=False,
+        )
+        resp = SendStreamingMessageResponse(
+            root=SendStreamingMessageSuccessResponse(id="1", result=event)
+        )
+        assert self.fn(resp) is None
 
     def test_error_response_returns_none(self):
         assert self.fn(_error_response()) is None

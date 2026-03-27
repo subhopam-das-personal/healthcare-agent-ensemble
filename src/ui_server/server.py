@@ -11,6 +11,11 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 from httpx_sse import aconnect_sse
+from a2a.types import (
+    SendStreamingMessageResponse, SendStreamingMessageSuccessResponse,
+    TaskArtifactUpdateEvent, TaskStatusUpdateEvent, Message as A2AMessage,
+    TaskState, TextPart,
+)
 load_dotenv()
 
 from fastapi import FastAPI, Request
@@ -44,34 +49,42 @@ app = FastAPI(title="CDS UI")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
-def _extract_text_from_sse(data: str) -> str | None:
-    """Extract streamed text from a raw A2A SSE event JSON string.
+def _text_from_a2a_event(response: SendStreamingMessageResponse) -> str | None:
+    """Extract streamed text from an A2A SendStreamingMessageResponse.
 
     Handles artifact-update (streaming chunks), message (final), and
-    status-update (failed state) events.
+    status-update (failed + working states) events.
     """
-    try:
-        event = json.loads(data)
-    except json.JSONDecodeError:
+    root = response.root
+    if not isinstance(root, SendStreamingMessageSuccessResponse):
         return None
-    result = event.get("result", {})
-    kind = result.get("kind")
-    if kind == "artifact-update":
-        for part in result.get("artifact", {}).get("parts", []):
-            if part.get("kind") == "text" and part.get("text"):
-                return part["text"]
-    elif kind == "message":
-        for part in result.get("parts", []):
-            if part.get("kind") == "text" and part.get("text"):
-                return part["text"]
-    elif kind == "status-update":
-        # Forward failed-state messages so the UI can display a meaningful error
-        status = result.get("status", {})
-        if status.get("state") == "failed":
-            msg = status.get("message", {})
-            for part in (msg.get("parts") or []):
-                if part.get("kind") == "text" and part.get("text"):
-                    return f"\n\n**Error:** {part['text']}"
+    result = root.result
+    if isinstance(result, TaskArtifactUpdateEvent):
+        for part in (result.artifact.parts or []):
+            inner = part.root if hasattr(part, "root") else part
+            if isinstance(inner, TextPart) and inner.text:
+                return inner.text
+    elif isinstance(result, A2AMessage):
+        for part in (result.parts or []):
+            inner = part.root if hasattr(part, "root") else part
+            if isinstance(inner, TextPart) and inner.text:
+                return inner.text
+    elif isinstance(result, TaskStatusUpdateEvent):
+        status = result.status
+        if status.state == TaskState.failed:
+            msg = status.message
+            if msg:
+                for part in (msg.parts or []):
+                    inner = part.root if hasattr(part, "root") else part
+                    if isinstance(inner, TextPart) and inner.text:
+                        return f"\n\n**Error:** {inner.text}"
+        elif status.state == TaskState.working:
+            msg = status.message
+            if msg:
+                for part in (msg.parts or []):
+                    inner = part.root if hasattr(part, "root") else part
+                    if isinstance(inner, TextPart) and inner.text:
+                        return f"status:{inner.text}"
     return None
 
 
@@ -131,7 +144,11 @@ async def stream(
                             return
                         if not sse.data:
                             continue
-                        text = _extract_text_from_sse(sse.data)
+                        try:
+                            resp = SendStreamingMessageResponse.model_validate_json(sse.data)
+                        except Exception:
+                            continue
+                        text = _text_from_a2a_event(resp)
                         if text:
                             yield {"data": text}
         except httpx.ConnectError:
