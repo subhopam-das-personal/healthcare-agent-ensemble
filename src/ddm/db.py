@@ -11,7 +11,17 @@ logger = logging.getLogger(__name__)
 
 _engine = None
 _SessionLocal = None
-_MIGRATION_FILE = pathlib.Path(__file__).parent.parent.parent / "migrations" / "001_ddm_schema.sql"
+def _find_migration_file() -> pathlib.Path:
+    """Walk up from this file's location until we find migrations/001_ddm_schema.sql."""
+    here = pathlib.Path(__file__).resolve()
+    for parent in [here, *here.parents]:
+        candidate = parent / "migrations" / "001_ddm_schema.sql"
+        if candidate.exists():
+            return candidate
+    # Fallback to expected location (will produce a clear "not found" warning)
+    return here.parent.parent.parent / "migrations" / "001_ddm_schema.sql"
+
+_MIGRATION_FILE = _find_migration_file()
 
 
 def _async_db_url() -> str:
