@@ -516,21 +516,34 @@ async def index_fhir_source(
     logger.info(f"[index_fhir_source] source_id={source_id} max_patients={max_patients}")
     try:
         if ctx:
-            await ctx.info(f"Starting indexing job for source {source_id}…")
+            await ctx.info(f"Starting background indexing job for source {source_id}…")
     except Exception:
         pass
 
+    # Run indexer in a background thread with its own event loop so this tool
+    # returns immediately (indexing 200 patients takes several minutes).
     try:
+        import threading
+        from ddm.db import reset_engine
         from ddm.indexer import run_indexer
-        await run_indexer(
-            source_id=source_id,
-            max_patients=max_patients if max_patients > 0 else None,
-        )
+
+        _max = max_patients if max_patients > 0 else None
+
+        def _run():
+            reset_engine()  # fresh engine in this thread's loop
+            asyncio.run(run_indexer(source_id=source_id, max_patients=_max))
+
+        threading.Thread(target=_run, daemon=True, name=f"indexer-{source_id}").start()
     except Exception as e:
-        logger.error(f"[index_fhir_source] failed: {e}")
+        logger.error(f"[index_fhir_source] failed to start: {e}")
         return json.dumps({"error": str(e)}, indent=2)
 
-    return json.dumps({"status": "done", "source_id": source_id}, indent=2)
+    return json.dumps({
+        "status": "started",
+        "source_id": source_id,
+        "max_patients": max_patients or "unlimited",
+        "note": "Indexing runs in the background. Check index_jobs table for progress.",
+    }, indent=2)
 
 
 @mcp.tool(meta=_UI_META)
@@ -607,30 +620,17 @@ if __name__ == "__main__":
     import asyncio
     import uvicorn
 
-    # Run DDM migrations on startup (idempotent — safe every deploy)
+    # Run DDM migrations synchronously before uvicorn starts its event loop.
+    # This avoids the "Future attached to a different loop" error that occurs
+    # when asyncio.run() creates a temporary loop before uvicorn creates its own.
     if os.environ.get("DATABASE_URL"):
         try:
-            from ddm.db import run_migrations, get_session_factory
-            asyncio.run(run_migrations())
-            # Kick off initial SMART Health IT index if patients table is empty
-            async def _maybe_index():
-                from sqlalchemy import text
-                sf = get_session_factory()
-                async with sf() as s:
-                    count = (await s.execute(text("SELECT COUNT(*) FROM patients"))).scalar()
-                if count == 0:
-                    logger.info("Patients table empty — starting initial SMART Health IT index (background)")
-                    from ddm.indexer import run_indexer
-                    import threading
-                    threading.Thread(
-                        target=lambda: asyncio.run(run_indexer(source_id=1, max_patients=200)),
-                        daemon=True,
-                    ).start()
-                else:
-                    logger.info(f"DDM: {count} patients already indexed")
-            asyncio.run(_maybe_index())
+            from ddm.db import run_migrations_sync, reset_engine
+            run_migrations_sync()
+            # Reset engine cache so it is recreated inside uvicorn's event loop
+            reset_engine()
         except Exception as _e:
-            logger.warning(f"DDM startup skipped: {_e}")
+            logger.warning(f"DDM migration skipped: {_e}")
 
     port = int(os.environ.get("PORT", os.environ.get("MCP_PORT", 8000)))
     api_key = os.environ.get("MCP_API_KEY", "")
