@@ -7,7 +7,10 @@ Run the migration first; these models are read/write helpers, not DDL.
 from sqlalchemy import (
     Boolean, Column, Date, Float, ForeignKey, Integer, Text, ARRAY,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMPTZ
+from sqlalchemy import DateTime
+from sqlalchemy.dialects.postgresql import JSONB
+
+TIMESTAMPTZ = DateTime(timezone=True)
 from sqlalchemy.orm import DeclarativeBase
 
 
