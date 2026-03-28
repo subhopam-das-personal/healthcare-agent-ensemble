@@ -21,6 +21,7 @@ from typing import Optional
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import sessionmaker
 
 from .db import get_engine, get_session_factory
 from .schema import (
