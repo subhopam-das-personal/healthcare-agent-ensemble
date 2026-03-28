@@ -84,7 +84,7 @@ def _load_demo_patient_json() -> str:
     """Return the serotonin syndrome demo patient bundle as a JSON string."""
     try:
         return _DEMO_BUNDLE_PATH.read_text()
-    except FileNotFoundError:
+    except OSError:
         return ""
 
 _STATIC_DRUG_CHECKER_MD = """
@@ -533,6 +533,15 @@ if run_btn:
             for header in SECTION_HEADERS:
                 if header in sections:
                     _try_render_section(header, sections[header])
+
+        raw_context = "\n\n".join(f"## {k}\n{v}" for k, v in sections.items())
+        try:
+            st.session_state.analysis_context = base64.b64encode(
+                raw_context[:6000].encode()
+            ).decode()
+        except Exception:
+            pass
+        st.session_state.analysis_done = True
     else:
         # Render output sections
         for header in SECTION_HEADERS:
