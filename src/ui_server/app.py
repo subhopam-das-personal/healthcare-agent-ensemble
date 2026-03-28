@@ -442,37 +442,39 @@ with _tab_review:
     else:
         st.markdown("### 🤖 Clinical Decision Support Assistant")
 
-    if not run_btn and not st.session_state.analysis_done:
+    _review_ready = run_btn or st.session_state.analysis_done
+
+    if not _review_ready:
         if demo_mode:
             st.info("Click **▶ Run Analysis** in the sidebar to run the serotonin syndrome near-miss demo.")
         else:
             st.info("Configure patient details in the sidebar and click **▶ Run Analysis** to begin.")
-        st.stop()
 
     # ── Run analysis ──────────────────────────────────────────────────────────
 
-    if run_btn:
+    if run_btn and _review_ready:
         if not patient_id.strip():
             st.error("Patient ID is required.")
-            st.stop()
+            _review_ready = False
 
-        st.session_state.messages = []
-        st.session_state.analysis_context = ""
-        st.session_state.analysis_done = False
+        if _review_ready:
+         st.session_state.messages = []
+         st.session_state.analysis_context = ""
+         st.session_state.analysis_done = False
 
-        msg_data: dict = {
-            "patient_id": patient_id.strip(),
-            "skill": skill,
-            "symptoms": symptoms,
-            "proposed_medications": proposed_meds,
-        }
-        if demo_mode:
-            demo_json = _load_demo_patient_json()
-            if demo_json:
-                msg_data["patient_json"] = demo_json
-            else:
-                st.warning("Demo patient file not found — running without pre-loaded patient data.")
-                st.stop()
+         msg_data: dict = {
+             "patient_id": patient_id.strip(),
+             "skill": skill,
+             "symptoms": symptoms,
+             "proposed_medications": proposed_meds,
+         }
+         if demo_mode:
+             demo_json = _load_demo_patient_json()
+             if demo_json:
+                 msg_data["patient_json"] = demo_json
+             else:
+                 st.warning("Demo patient file not found — running without pre-loaded patient data.")
+                 _review_ready = False
 
         payload = {
             "jsonrpc": "2.0",
@@ -557,11 +559,11 @@ with _tab_review:
             except httpx.ConnectError:
                 status_box.update(label="❌ Cannot connect to agent", state="error")
                 st.error(f"Cannot connect to A2A agent at {A2A_AGENT_URL}. Is it running?")
-                st.stop()
+                _review_ready = False
             except Exception as e:
                 status_box.update(label="❌ Error", state="error")
                 st.error(f"Error: {e}")
-                st.stop()
+                _review_ready = False
 
         if error_text:
             st.error(f"⚠️ {error_text}")
