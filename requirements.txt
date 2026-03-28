@@ -8,3 +8,7 @@ python-dotenv>=1.0.0
 fastapi>=0.111.0
 sse-starlette>=1.8.2
 streamlit>=1.35.0
+# DDM — FHIR NL Query Engine
+sqlalchemy[asyncio]>=2.0.0
+asyncpg>=0.29.0
+pgvector>=0.3.0

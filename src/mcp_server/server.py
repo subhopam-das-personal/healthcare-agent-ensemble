@@ -451,8 +451,186 @@ async def get_trial_details_tool(
     return json.dumps(result, indent=2)
 
 
+@mcp.tool(meta=_UI_META)
+async def nl_query_patients(
+    question: str,
+    ctx: Context = None,
+) -> str:
+    """Search the indexed patient cohort using plain English clinical queries.
+
+    Runs a hybrid pipeline: medical entity extraction → ontology expansion →
+    SQL query (Claude-generated, EXPLAIN-validated) → text-similarity fallback.
+    Returns matching patients plus an ontological expansion panel showing which
+    codes and drug classes were matched.
+
+    Args:
+        question: Natural language clinical question, e.g.
+                  "patients with heart failure on ACE inhibitors who have elevated creatinine"
+    """
+    logger.info(f"[nl_query_patients] question={question!r}")
+    try:
+        if ctx:
+            await ctx.info("Extracting medical entities from query…")
+    except Exception:
+        pass
+
+    try:
+        from ddm.query_engine import query_patients
+        result = await query_patients(question)
+    except Exception as e:
+        logger.error(f"[nl_query_patients] query failed: {e}")
+        return json.dumps({"error": str(e), "patients": []}, indent=2)
+
+    try:
+        if ctx:
+            await ctx.info(
+                f"Found {result.count} patient(s) via {result.mode} search"
+            )
+    except Exception:
+        pass
+
+    return json.dumps({
+        "count": result.count,
+        "mode": result.mode,
+        "patients": result.patients,
+        "expansion": result.expansion,
+        "sql": result.sql,
+    }, indent=2, default=str)
+
+
+@mcp.tool(meta=_UI_META)
+async def index_fhir_source(
+    source_id: int,
+    max_patients: int = 0,
+    ctx: Context = None,
+) -> str:
+    """Trigger a FHIR indexing job for a registered source.
+
+    Paginates the FHIR server, writes patients + conditions/medications/observations
+    to Postgres, and checkpoints progress so the job can resume after interruption.
+
+    Args:
+        source_id: ID from the fhir_sources table (see add_fhir_source)
+        max_patients: Stop after this many patients (0 = no limit; useful for smoke tests)
+    """
+    logger.info(f"[index_fhir_source] source_id={source_id} max_patients={max_patients}")
+    try:
+        if ctx:
+            await ctx.info(f"Starting indexing job for source {source_id}…")
+    except Exception:
+        pass
+
+    try:
+        from ddm.indexer import run_indexer
+        await run_indexer(
+            source_id=source_id,
+            max_patients=max_patients if max_patients > 0 else None,
+        )
+    except Exception as e:
+        logger.error(f"[index_fhir_source] failed: {e}")
+        return json.dumps({"error": str(e)}, indent=2)
+
+    return json.dumps({"status": "done", "source_id": source_id}, indent=2)
+
+
+@mcp.tool(meta=_UI_META)
+async def add_fhir_source(
+    name: str,
+    base_url: str,
+    auth_type: str = "none",
+    client_id: str = "",
+    client_secret: str = "",
+    token_url: str = "",
+    scope: str = "",
+    ctx: Context = None,
+) -> str:
+    """Register a new FHIR R4 source (SMART sandbox, Epic, Cerner, etc.).
+
+    The source is stored in fhir_sources and used by index_fhir_source.
+    For OAuth2 sources (Epic), provide client_id, client_secret, and token_url.
+
+    Args:
+        name: Human-readable label, e.g. "Epic Sandbox"
+        base_url: FHIR R4 base URL, e.g. "https://fhir.epic.com/interconnect-fhir-oauth/api/FHIR/R4"
+        auth_type: "none" | "bearer" | "oauth2"
+        client_id: OAuth2 client ID (oauth2 only)
+        client_secret: OAuth2 client secret (oauth2 only)
+        token_url: OAuth2 token endpoint (oauth2 only)
+        scope: OAuth2 scope string (oauth2 only)
+    """
+    logger.info(f"[add_fhir_source] name={name!r} base_url={base_url!r} auth_type={auth_type!r}")
+
+    auth_config: dict = {}
+    if auth_type == "oauth2":
+        auth_config = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "token_url": token_url,
+            "scope": scope,
+        }
+    elif auth_type == "bearer":
+        auth_config = {"token": client_secret}  # reuse client_secret field as token
+
+    try:
+        from sqlalchemy import text as sa_text
+        from ddm.db import get_session_factory
+        from ddm.schema import FhirSource
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            async with session.begin():
+                stmt = pg_insert(FhirSource).values(
+                    name=name,
+                    base_url=base_url.rstrip("/"),
+                    auth_type=auth_type,
+                    auth_config=auth_config,
+                    active=True,
+                ).returning(FhirSource.id)
+                result = await session.execute(stmt)
+                new_id = result.scalar_one()
+
+        try:
+            if ctx:
+                await ctx.info(f"Registered FHIR source {name!r} with id={new_id}")
+        except Exception:
+            pass
+
+        return json.dumps({"status": "created", "source_id": new_id, "name": name}, indent=2)
+
+    except Exception as e:
+        logger.error(f"[add_fhir_source] failed: {e}")
+        return json.dumps({"error": str(e)}, indent=2)
+
+
 if __name__ == "__main__":
+    import asyncio
     import uvicorn
+
+    # Run DDM migrations on startup (idempotent — safe every deploy)
+    if os.environ.get("DATABASE_URL"):
+        try:
+            from ddm.db import run_migrations, get_session_factory
+            asyncio.run(run_migrations())
+            # Kick off initial SMART Health IT index if patients table is empty
+            async def _maybe_index():
+                from sqlalchemy import text
+                sf = get_session_factory()
+                async with sf() as s:
+                    count = (await s.execute(text("SELECT COUNT(*) FROM patients"))).scalar()
+                if count == 0:
+                    logger.info("Patients table empty — starting initial SMART Health IT index (background)")
+                    from ddm.indexer import run_indexer
+                    import threading
+                    threading.Thread(
+                        target=lambda: asyncio.run(run_indexer(source_id=1, max_patients=200)),
+                        daemon=True,
+                    ).start()
+                else:
+                    logger.info(f"DDM: {count} patients already indexed")
+            asyncio.run(_maybe_index())
+        except Exception as _e:
+            logger.warning(f"DDM startup skipped: {_e}")
 
     port = int(os.environ.get("PORT", os.environ.get("MCP_PORT", 8000)))
     api_key = os.environ.get("MCP_API_KEY", "")
