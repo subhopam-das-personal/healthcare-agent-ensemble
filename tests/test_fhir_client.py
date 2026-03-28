@@ -361,3 +361,79 @@ async def test_get_patient_data_truncation_warning():
 
     assert "warnings" in result
     assert any("Conditions" in w for w in result["warnings"])
+
+
+# --------------------------------------------------------------------------- #
+# get_patient_data — patient_json fast-path
+# --------------------------------------------------------------------------- #
+
+DEMO_BUNDLE = {
+    "resourceType": "Bundle",
+    "type": "collection",
+    "entry": [
+        {"resource": {
+            "resourceType": "Patient",
+            "id": "demo-001",
+            "name": [{"family": "Alvarez", "given": ["Margaret"]}],
+            "gender": "female",
+            "birthDate": "1969-03-14",
+        }},
+        {"resource": {
+            "resourceType": "Condition",
+            "code": {"coding": [{"code": "370143000", "display": "Major depressive disorder"}]},
+            "clinicalStatus": {"coding": [{"code": "active"}]},
+            "onsetDateTime": "2020-01-01",
+        }},
+        {"resource": {
+            "resourceType": "MedicationRequest",
+            "medicationCodeableConcept": {"coding": [{"code": "1049502", "display": "Sertraline 100 MG Oral Tablet"}]},
+            "status": "active",
+            "intent": "order",
+        }},
+        {"resource": {
+            "resourceType": "Observation",
+            "code": {"coding": [{"code": "8480-6", "display": "Systolic BP"}]},
+            "valueQuantity": {"value": 130, "unit": "mmHg"},
+        }},
+        {"resource": {
+            "resourceType": "AllergyIntolerance",
+            "code": {"coding": [{"code": "372687004", "display": "Penicillin"}]},
+            "clinicalStatus": {"coding": [{"code": "active"}]},
+            "type": "allergy",
+            "criticality": "high",
+        }},
+    ],
+}
+
+
+@pytest.mark.asyncio
+async def test_get_patient_data_patient_json_happy_path():
+    """patient_json bypasses FHIR server and parses bundle directly."""
+    import json as _json
+    result = await get_patient_data("ignored-id", patient_json=_json.dumps(DEMO_BUNDLE))
+    assert "error" not in result
+    assert result["patient"]["id"] == "demo-001"
+    assert len(result["conditions"]) == 1
+    assert len(result["medications"]) == 1
+    assert len(result["observations"]) == 1
+    assert len(result["allergies"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_patient_data_patient_json_invalid_json():
+    """Invalid JSON in patient_json returns an error dict."""
+    result = await get_patient_data("p1", patient_json="not-json{{{")
+    assert "error" in result
+    assert "Invalid patient_json" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_get_patient_data_patient_json_no_patient_resource():
+    """Bundle with no Patient resource returns an error dict."""
+    import json as _json
+    bundle = {"resourceType": "Bundle", "type": "collection", "entry": [
+        {"resource": {"resourceType": "Condition"}}
+    ]}
+    result = await get_patient_data("p1", patient_json=_json.dumps(bundle))
+    assert "error" in result
+    assert "no Patient resource" in result["error"]

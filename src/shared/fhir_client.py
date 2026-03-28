@@ -133,8 +133,36 @@ async def get_patient_data(
     patient_id: str,
     fhir_base_url: str = DEFAULT_FHIR_BASE_URL,
     access_token: Optional[str] = None,
+    patient_json: str = "",
 ) -> dict:
-    """Fetch comprehensive patient data from FHIR server (cached 5 min)."""
+    """Fetch comprehensive patient data from FHIR server (cached 5 min).
+
+    If patient_json is provided, it is parsed directly and the FHIR server is
+    not contacted. Expects a FHIR R4 Bundle with Patient, Condition,
+    MedicationRequest, Observation, and AllergyIntolerance entries.
+    """
+    if patient_json:
+        try:
+            bundle = json.loads(patient_json)
+        except json.JSONDecodeError as e:
+            return {"error": f"Invalid patient_json: {e}"}
+        entries = [e.get("resource", {}) for e in bundle.get("entry", [])]
+        patient_resources = [r for r in entries if r.get("resourceType") == "Patient"]
+        if not patient_resources:
+            return {"error": "patient_json bundle contains no Patient resource"}
+        patient = _parse_patient(patient_resources[0])
+        conditions = [_parse_condition(r) for r in entries if r.get("resourceType") == "Condition"]
+        medications = [_parse_medication(r) for r in entries if r.get("resourceType") == "MedicationRequest"]
+        observations = [_parse_observation(r) for r in entries if r.get("resourceType") == "Observation"]
+        allergies = [_parse_allergy(r) for r in entries if r.get("resourceType") == "AllergyIntolerance"]
+        return {
+            "patient": patient,
+            "conditions": conditions,
+            "medications": medications,
+            "observations": observations[:50],
+            "allergies": allergies,
+        }
+
     cache_key = (patient_id, fhir_base_url.rstrip("/"))
     cached = _PATIENT_CACHE.get(cache_key)
     if cached:
