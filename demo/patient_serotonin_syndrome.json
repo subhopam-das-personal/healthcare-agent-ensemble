@@ -1,0 +1,260 @@
+{
+  "resourceType": "Bundle",
+  "id": "demo-serotonin-syndrome-bundle",
+  "type": "collection",
+  "entry": [
+    {
+      "resource": {
+        "resourceType": "Patient",
+        "id": "demo-serotonin-patient-001",
+        "name": [
+          {
+            "use": "official",
+            "family": "Alvarez",
+            "given": ["Margaret", "L."]
+          }
+        ],
+        "gender": "female",
+        "birthDate": "1969-03-14",
+        "maritalStatus": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/v3-MaritalStatus",
+              "code": "M",
+              "display": "Married"
+            }
+          ],
+          "text": "Married"
+        }
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Condition",
+        "id": "cond-mdd-001",
+        "clinicalStatus": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+              "code": "active"
+            }
+          ]
+        },
+        "code": {
+          "coding": [
+            {
+              "system": "http://snomed.info/sct",
+              "code": "370143000",
+              "display": "Major depressive disorder"
+            }
+          ],
+          "text": "Major depressive disorder"
+        },
+        "subject": { "reference": "Patient/demo-serotonin-patient-001" },
+        "onsetDateTime": "2021-06-01"
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Condition",
+        "id": "cond-pain-001",
+        "clinicalStatus": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+              "code": "active"
+            }
+          ]
+        },
+        "code": {
+          "coding": [
+            {
+              "system": "http://snomed.info/sct",
+              "code": "279039007",
+              "display": "Chronic low back pain"
+            }
+          ],
+          "text": "Chronic low back pain"
+        },
+        "subject": { "reference": "Patient/demo-serotonin-patient-001" },
+        "onsetDateTime": "2019-11-15"
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Condition",
+        "id": "cond-infection-001",
+        "clinicalStatus": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+              "code": "active"
+            }
+          ]
+        },
+        "code": {
+          "coding": [
+            {
+              "system": "http://snomed.info/sct",
+              "code": "76783007",
+              "display": "Post-operative wound infection"
+            }
+          ],
+          "text": "Post-operative wound infection"
+        },
+        "subject": { "reference": "Patient/demo-serotonin-patient-001" },
+        "onsetDateTime": "2026-03-10"
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationRequest",
+        "id": "med-sertraline-001",
+        "status": "active",
+        "intent": "order",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "58827",
+              "display": "Sertraline 100 MG Oral Tablet"
+            }
+          ],
+          "text": "Sertraline 100 MG Oral Tablet"
+        },
+        "subject": { "reference": "Patient/demo-serotonin-patient-001" },
+        "authoredOn": "2023-01-10",
+        "dosageInstruction": [
+          {
+            "text": "100 mg by mouth daily"
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationRequest",
+        "id": "med-tramadol-001",
+        "status": "active",
+        "intent": "order",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "41493",
+              "display": "Tramadol 50 MG Oral Tablet"
+            }
+          ],
+          "text": "Tramadol 50 MG Oral Tablet"
+        },
+        "subject": { "reference": "Patient/demo-serotonin-patient-001" },
+        "authoredOn": "2024-08-20",
+        "dosageInstruction": [
+          {
+            "text": "50 mg by mouth every 6 hours as needed for pain"
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "MedicationRequest",
+        "id": "med-linezolid-001",
+        "status": "active",
+        "intent": "order",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "190376",
+              "display": "Linezolid 600 MG Oral Tablet"
+            }
+          ],
+          "text": "Linezolid 600 MG Oral Tablet"
+        },
+        "subject": { "reference": "Patient/demo-serotonin-patient-001" },
+        "authoredOn": "2026-03-12",
+        "dosageInstruction": [
+          {
+            "text": "600 mg by mouth every 12 hours for 10 days"
+          }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Observation",
+        "id": "obs-bp-001",
+        "status": "final",
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "55284-4",
+              "display": "Blood pressure systolic and diastolic"
+            }
+          ],
+          "text": "Blood pressure"
+        },
+        "subject": { "reference": "Patient/demo-serotonin-patient-001" },
+        "effectiveDateTime": "2026-03-20",
+        "valueQuantity": {
+          "value": 122,
+          "unit": "mmHg",
+          "system": "http://unitsofmeasure.org",
+          "code": "mm[Hg]"
+        }
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Observation",
+        "id": "obs-hr-001",
+        "status": "final",
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "8867-4",
+              "display": "Heart rate"
+            }
+          ],
+          "text": "Heart rate"
+        },
+        "subject": { "reference": "Patient/demo-serotonin-patient-001" },
+        "effectiveDateTime": "2026-03-20",
+        "valueQuantity": {
+          "value": 78,
+          "unit": "beats/minute",
+          "system": "http://unitsofmeasure.org",
+          "code": "/min"
+        }
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Observation",
+        "id": "obs-temp-001",
+        "status": "final",
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "8310-5",
+              "display": "Body temperature"
+            }
+          ],
+          "text": "Body temperature"
+        },
+        "subject": { "reference": "Patient/demo-serotonin-patient-001" },
+        "effectiveDateTime": "2026-03-20",
+        "valueQuantity": {
+          "value": 98.6,
+          "unit": "degF",
+          "system": "http://unitsofmeasure.org",
+          "code": "[degF]"
+        }
+      }
+    }
+  ]
+}

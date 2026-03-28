@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import pathlib
 import sys
 import uuid
 
@@ -73,6 +74,40 @@ SECTION_HEADERS = [
     "Drug Interaction Analysis",
     "Integrated Clinical Assessment",
 ]
+
+# ── Demo Mode ─────────────────────────────────────────────────────────────────
+
+_DEMO_BUNDLE_PATH = pathlib.Path(__file__).parent.parent.parent / "demo" / "patient_serotonin_syndrome.json"
+_DEMO_PATIENT_ID = "demo-serotonin-patient-001"
+
+def _load_demo_patient_json() -> str:
+    """Return the serotonin syndrome demo patient bundle as a JSON string."""
+    try:
+        return _DEMO_BUNDLE_PATH.read_text()
+    except FileNotFoundError:
+        return ""
+
+_STATIC_DRUG_CHECKER_MD = """
+**Patient:** Margaret Alvarez, 55F, post-surgical
+
+**Active Medications:**
+- Sertraline 100 MG Oral Tablet
+- Tramadol 50 MG Oral Tablet
+- Linezolid 600 MG Oral Tablet
+
+---
+
+**Alerts:**
+
+⚠️ **Low:** Monitor renal function
+*(Tramadol — caution if CrCl < 30 mL/min)*
+
+---
+
+✅ **No critical drug–drug interactions detected.**
+
+*Standard pairwise checker evaluates each drug pair independently.*
+"""
 
 
 # ── SSE parsing ───────────────────────────────────────────────────────────────
@@ -310,20 +345,36 @@ with st.sidebar:
     st.caption("AI-powered · Healthcare Agent Ensemble")
     st.divider()
 
-    patient_id = st.text_input(
-        "Patient ID (FHIR UUID)",
-        value="fa064acf-b7f1-4279-83d3-7a94686da7ba",
-        placeholder="Enter FHIR patient UUID…",
-    )
+    demo_mode = st.checkbox("🎬 Demo Mode", value=False, help="Loads the serotonin syndrome near-miss scenario")
 
-    skill = st.radio(
-        "Analysis Type",
-        options=list(SKILL_LABELS.keys()),
-        format_func=lambda s: SKILL_LABELS[s],
-    )
+    st.divider()
 
-    symptoms = st.text_area("Symptoms (optional)", height=72, placeholder="e.g. chest pain, shortness of breath")
-    proposed_meds = st.text_input("Proposed Medications", placeholder="comma-separated")
+    if demo_mode:
+        patient_id = _DEMO_PATIENT_ID
+        skill = "comprehensive-clinical-review"
+        symptoms = ""
+        proposed_meds = ""
+        st.info(
+            "**Demo patient loaded**\n\n"
+            "Margaret Alvarez · 55F\n\n"
+            "Sertraline + Tramadol + Linezolid\n\n"
+            "*Synthetic patient — constructed from published FDA adverse event patterns.*"
+        )
+    else:
+        patient_id = st.text_input(
+            "Patient ID (FHIR UUID)",
+            value="fa064acf-b7f1-4279-83d3-7a94686da7ba",
+            placeholder="Enter FHIR patient UUID…",
+        )
+
+        skill = st.radio(
+            "Analysis Type",
+            options=list(SKILL_LABELS.keys()),
+            format_func=lambda s: SKILL_LABELS[s],
+        )
+
+        symptoms = st.text_area("Symptoms (optional)", height=72, placeholder="e.g. chest pain, shortness of breath")
+        proposed_meds = st.text_input("Proposed Medications", placeholder="comma-separated")
 
     st.divider()
     run_btn = st.button("▶ Run Analysis", type="primary", use_container_width=True)
@@ -332,10 +383,24 @@ with st.sidebar:
 
 # ── Main area ─────────────────────────────────────────────────────────────────
 
-st.markdown("### 🤖 Clinical Decision Support Assistant")
+if demo_mode:
+    st.markdown("### 🎬 Near-Miss Reconstruction Demo")
+    st.warning(
+        "⚠️ **Serotonin syndrome is underrecognized:** 85% of general practitioners were unaware it "
+        "existed as a diagnosis *(Mackay et al., Br J Gen Pract 1999)*. "
+        "Annual incidence estimated at 14–16 cases/million per year, likely higher due to underreporting."
+    )
+    st.caption(
+        "The patient below is a synthetic representation constructed from published FDA adverse event patterns — not a real individual's record."
+    )
+else:
+    st.markdown("### 🤖 Clinical Decision Support Assistant")
 
 if not run_btn and not st.session_state.analysis_done:
-    st.info("Configure patient details in the sidebar and click **▶ Run Analysis** to begin.")
+    if demo_mode:
+        st.info("Click **▶ Run Analysis** in the sidebar to run the serotonin syndrome near-miss demo.")
+    else:
+        st.info("Configure patient details in the sidebar and click **▶ Run Analysis** to begin.")
     st.stop()
 
 
@@ -350,6 +415,20 @@ if run_btn:
     st.session_state.analysis_context = ""
     st.session_state.analysis_done = False
 
+    msg_data: dict = {
+        "patient_id": patient_id.strip(),
+        "skill": skill,
+        "symptoms": symptoms,
+        "proposed_medications": proposed_meds,
+    }
+    if demo_mode:
+        demo_json = _load_demo_patient_json()
+        if demo_json:
+            msg_data["patient_json"] = demo_json
+        else:
+            st.warning("Demo patient file not found — running without pre-loaded patient data.")
+            st.stop()
+
     payload = {
         "jsonrpc": "2.0",
         "id": str(uuid.uuid4()),
@@ -358,12 +437,7 @@ if run_btn:
             "message": {
                 "role": "user",
                 "messageId": str(uuid.uuid4()),
-                "parts": [{"kind": "text", "text": json.dumps({
-                    "patient_id": patient_id.strip(),
-                    "skill": skill,
-                    "symptoms": symptoms,
-                    "proposed_medications": proposed_meds,
-                })}],
+                "parts": [{"kind": "text", "text": json.dumps(msg_data)}],
             }
         },
     }
@@ -449,6 +523,16 @@ if run_btn:
 
     if error_text:
         st.error(f"⚠️ {error_text}")
+    elif demo_mode:
+        col_left, col_right = st.columns(2)
+        with col_left:
+            st.markdown("#### Standard Pairwise Drug Checker *(simulated)*")
+            st.markdown(_STATIC_DRUG_CHECKER_MD)
+        with col_right:
+            st.markdown("#### Healthcare Agent Ensemble")
+            for header in SECTION_HEADERS:
+                if header in sections:
+                    _try_render_section(header, sections[header])
     else:
         # Render output sections
         for header in SECTION_HEADERS:

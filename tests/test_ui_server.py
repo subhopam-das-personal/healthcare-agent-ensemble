@@ -54,6 +54,7 @@ def _make_st_stub():
     st.text_area = lambda *a, **kw: ""
     st.radio = lambda *a, **kw: None
     st.button = lambda *a, **kw: False
+    st.checkbox = lambda *a, **kw: False
     st.caption = lambda *a, **kw: None
     st.chat_input = lambda *a, **kw: None
     st.chat_message = lambda *a, **kw: _CtxMgr()
