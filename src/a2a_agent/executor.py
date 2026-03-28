@@ -100,6 +100,7 @@ def _parse_user_input(context: RequestContext) -> dict:
             "skill": parsed.get("skill", "comprehensive-clinical-review"),
             "proposed_medications": parsed.get("proposed_medications", ""),
             "access_token": parsed.get("access_token", ""),
+            "patient_json": parsed.get("patient_json", ""),
         }
     except (json.JSONDecodeError, TypeError):
         pass
@@ -175,8 +176,8 @@ class CDSAgentExecutor(AgentExecutor):
                 message=_status_msg(f"Error: {str(e)}"),
             )
 
-    async def _fetch_patient(self, patient_id: str, fhir_base_url: str, token: str | None) -> dict:
-        return await get_patient_data(patient_id, fhir_base_url, token)
+    async def _fetch_patient(self, patient_id: str, fhir_base_url: str, token: str | None, patient_json: str = "") -> dict:
+        return await get_patient_data(patient_id, fhir_base_url, token, patient_json)
 
     async def _fetch_rxnav(self, medications: list) -> dict | None:
         if len(medications) < 2:
@@ -191,12 +192,13 @@ class CDSAgentExecutor(AgentExecutor):
         patient_id = params["patient_id"]
         fhir_base_url = params["fhir_base_url"]
         token = params["access_token"] or None
+        patient_json = params.get("patient_json", "")
 
         # Step 1: Fetch patient data
         await updater.update_status(TaskState.working,
             message=_status_msg("Step 1/5: Fetching patient data from FHIR..."))
 
-        patient_data = await self._fetch_patient(patient_id, fhir_base_url, token)
+        patient_data = await self._fetch_patient(patient_id, fhir_base_url, token, patient_json)
         if "error" in patient_data:
             await updater.update_status(TaskState.failed,
                 message=_status_msg(f"FHIR fetch failed: {patient_data['error']}"))
@@ -299,11 +301,12 @@ class CDSAgentExecutor(AgentExecutor):
         patient_id = params["patient_id"]
         fhir_base_url = params["fhir_base_url"]
         token = params["access_token"] or None
+        patient_json = params.get("patient_json", "")
 
         await updater.update_status(TaskState.working,
             message=_status_msg("Fetching patient medications from FHIR..."))
 
-        patient_data = await self._fetch_patient(patient_id, fhir_base_url, token)
+        patient_data = await self._fetch_patient(patient_id, fhir_base_url, token, patient_json)
         if "error" in patient_data:
             await updater.update_status(TaskState.failed,
                 message=_status_msg(f"Drug check failed: {patient_data['error']}"))
@@ -348,11 +351,12 @@ class CDSAgentExecutor(AgentExecutor):
         patient_id = params["patient_id"]
         fhir_base_url = params["fhir_base_url"]
         token = params["access_token"] or None
+        patient_json = params.get("patient_json", "")
 
         await updater.update_status(TaskState.working,
             message=_status_msg("Fetching patient data from FHIR..."))
 
-        patient_data = await self._fetch_patient(patient_id, fhir_base_url, token)
+        patient_data = await self._fetch_patient(patient_id, fhir_base_url, token, patient_json)
         if "error" in patient_data:
             await updater.update_status(TaskState.failed,
                 message=_status_msg(f"DDx failed: {patient_data['error']}"))
