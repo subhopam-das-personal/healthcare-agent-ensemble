@@ -33,8 +33,11 @@ In modern healthcare, clinicians are overwhelmed with data from electronic healt
 
 ### Demo & Use Cases
 
+- **Serotonin Syndrome Near-Miss Demo**: One-click demo mode loads a synthetic patient (Margaret Alvarez, Sertraline + Tramadol + Linezolid) and shows side-by-side how a standard pairwise drug checker misses the emergent triple-drug interaction while the AI ensemble catches it.
 - **Medication Review**: Agent ensemble checks new prescriptions against patient history
 - **Symptom Analysis**: Multiple agents collaborate on differential diagnosis
 - **Treatment Planning**: Integrated insights from various clinical data sources
+
+> **Demo mode** — enable the "🎬 Demo Mode" checkbox in the Streamlit sidebar to run the serotonin syndrome scenario without a live FHIR server. The synthetic patient bundle is at `demo/patient_serotonin_syndrome.json`.
 
 This project demonstrates how AI agent ensembles can transform healthcare delivery through intelligent collaboration and standardized communication protocols.
