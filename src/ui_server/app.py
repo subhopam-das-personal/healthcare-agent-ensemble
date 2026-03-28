@@ -331,7 +331,7 @@ def _mcp_call(tool: str, arguments: dict) -> dict:
         headers["X-API-Key"] = MCP_API_KEY
     try:
         resp = httpx.post(
-            f"{MCP_SERVER_URL}/mcp/",
+            f"{MCP_SERVER_URL}/mcp",
             json=payload,
             headers=headers,
             timeout=60.0,
