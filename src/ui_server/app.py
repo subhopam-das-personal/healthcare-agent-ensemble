@@ -326,7 +326,11 @@ def _mcp_call(tool: str, arguments: dict) -> dict:
         "method": "tools/call",
         "params": {"name": tool, "arguments": arguments},
     }
-    headers = {"Content-Type": "application/json"}
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "mcp-protocol-version": "2025-03-26",
+    }
     if MCP_API_KEY:
         headers["X-API-Key"] = MCP_API_KEY
     try:
