@@ -302,28 +302,17 @@ async def _try_sql_path(
 # Vector similarity search (Gemini embedding → pgvector HNSW)
 # ---------------------------------------------------------------------------
 
-GEMINI_EMBED_MODEL = "models/text-embedding-004"
-
-
 async def _embed_question(question: str) -> Optional[list[float]]:
-    """Embed the NL question via Gemini text-embedding-004 (768-dim).
+    """Embed the NL question via Voyage AI voyage-3 (768-dim).
 
-    Returns None if GOOGLE_API_KEY is not set or the API call fails.
+    Returns None if VOYAGE_API_KEY is not set or the API call fails.
     """
-    api_key = os.environ.get("GOOGLE_API_KEY", "")
-    if not api_key:
+    if not os.environ.get("VOYAGE_API_KEY"):
         return None
     try:
-        import asyncio as _asyncio
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        result = await _asyncio.to_thread(
-            genai.embed_content,
-            model=GEMINI_EMBED_MODEL,
-            content=question,
-            task_type="retrieval_query",
-        )
-        return result["embedding"]
+        from ddm.embedder import embed_texts
+        vectors = await embed_texts([question], input_type="query")
+        return vectors[0]
     except Exception as e:
         logger.warning(f"Question embedding failed: {e}")
         return None

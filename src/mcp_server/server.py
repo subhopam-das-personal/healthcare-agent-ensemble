@@ -598,13 +598,14 @@ async def embed_patients(
     batch_size: int = 0,
     ctx: Context = None,
 ) -> str:
-    """Generate Gemini text-embedding-004 vectors for patients with NULL embeddings.
+    """Generate Voyage AI voyage-3 vectors for patients with NULL embeddings.
 
     Builds a clinical narrative per patient (demographics, conditions, medications,
-    key labs) and calls the Google Generative AI embedding API (768-dim). Stores
-    vectors in patients.embedding, enabling HNSW semantic similarity search.
+    key labs) and calls the Voyage AI embedding API (voyage-3, 768-dim). Processes
+    patients in batches of 100 — 200 patients = 2 API calls. Stores vectors in
+    patients.embedding, enabling HNSW semantic similarity search.
 
-    Requires GOOGLE_API_KEY environment variable on the MCP server service.
+    Requires VOYAGE_API_KEY environment variable on the MCP server service.
     Runs in the background — this tool returns immediately.
 
     Args:
@@ -637,7 +638,7 @@ async def embed_patients(
     return json.dumps({
         "status": "started",
         "batch_size": batch_size or "unlimited",
-        "model": "text-embedding-004",
+        "model": "voyage-3",
         "dimensions": 768,
         "note": "Embedding runs in the background. Check patients.embedding column for progress.",
     }, indent=2)

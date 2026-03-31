@@ -1,8 +1,10 @@
-"""DDM Embedder — Phase 3: generate Gemini text-embedding-004 vectors for each patient.
+"""DDM Embedder — Phase 3: generate Voyage AI voyage-3 vectors for each patient.
 
 Builds a plain-English clinical narrative per patient from their indexed conditions,
-medications, and observations, then calls the Google Generative AI embedding API
-(text-embedding-004, 768-dim) and stores the result in patients.embedding.
+medications, and observations, then calls the Voyage AI embedding API
+(voyage-3, output_dimension=768) and stores the result in patients.embedding.
+
+Voyage AI supports batching — 200 patients run in 2 API calls, not 200.
 
 Usage:
     python -m src.ddm.embedder                  # embed all patients with NULL embedding
@@ -16,6 +18,7 @@ import sys
 from datetime import date
 from typing import Optional
 
+import httpx
 from sqlalchemy import select, text as sa_text
 from sqlalchemy.orm import sessionmaker
 
@@ -24,9 +27,10 @@ from .schema import Patient, PatientCondition, PatientMedication, PatientObserva
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "models/text-embedding-004"
-MAX_CONCURRENCY = 4   # simultaneous Gemini API calls
-EMBED_DIM = 768
+VOYAGE_API_URL = "https://api.voyageai.com/v1/embeddings"
+VOYAGE_MODEL = "voyage-3"
+EMBED_DIM = 768          # matches patients.embedding vector(768)
+BATCH_SIZE = 100         # Voyage supports up to 128 inputs per request
 
 
 def _compute_age(birth_date: Optional[date]) -> Optional[int]:
@@ -44,41 +48,30 @@ def build_patient_narrative(
     medications: list,
     observations: list,
 ) -> str:
-    """Build a plain-English clinical narrative suitable for embedding.
-
-    Compact enough to stay well under Gemini's token limit (~2048 tokens),
-    rich enough to capture the clinical fingerprint of the patient.
-    """
+    """Build a plain-English clinical narrative suitable for embedding."""
     parts = []
 
-    # Demographics
     age = _compute_age(patient.birth_date)
     gender = patient.gender or "unknown gender"
-    if age:
-        parts.append(f"{age}-year-old {gender}.")
-    else:
-        parts.append(f"Patient, {gender}.")
+    parts.append(f"{age}-year-old {gender}." if age else f"Patient, {gender}.")
 
-    # Active conditions
-    active = [c for c in conditions if c.clinical_status == "active"]
-    if active:
-        cond_names = [c.display for c in active if c.display][:15]
-        parts.append("Conditions: " + "; ".join(cond_names) + ".")
+    active_conds = [c for c in conditions if c.clinical_status == "active"]
+    if active_conds:
+        names = [c.display for c in active_conds if c.display][:15]
+        parts.append("Conditions: " + "; ".join(names) + ".")
 
-    # Active medications
     active_meds = [m for m in medications if m.status == "active"]
     if active_meds:
-        med_names = [m.display for m in active_meds if m.display][:10]
-        parts.append("Medications: " + "; ".join(med_names) + ".")
+        names = [m.display for m in active_meds if m.display][:10]
+        parts.append("Medications: " + "; ".join(names) + ".")
 
-    # Key observations (most recent per LOINC)
     if observations:
-        seen_loinc: set[str] = set()
+        seen: set[str] = set()
         obs_parts = []
         for o in sorted(observations, key=lambda x: x.observation_date or date.min, reverse=True):
-            if o.loinc_code in seen_loinc:
+            if o.loinc_code in seen:
                 continue
-            seen_loinc.add(o.loinc_code)
+            seen.add(o.loinc_code)
             if o.display and (o.value_quantity is not None or o.value_string):
                 val = f"{o.value_quantity} {o.value_unit}" if o.value_quantity is not None else o.value_string
                 obs_parts.append(f"{o.display}: {val}")
@@ -90,126 +83,132 @@ def build_patient_narrative(
     return " ".join(parts)
 
 
-def _get_genai():
-    """Import and configure the google-generativeai client (lazy, so import errors surface clearly)."""
-    try:
-        import google.generativeai as genai
-    except ImportError:
-        raise RuntimeError(
-            "google-generativeai is not installed. Add it to requirements.txt."
-        )
-    api_key = os.environ.get("GOOGLE_API_KEY", "")
+async def embed_texts(texts: list[str], input_type: str = "document") -> list[list[float]]:
+    """Call Voyage AI and return a list of 768-dim vectors (one per input text).
+
+    Args:
+        texts: List of strings to embed (max 128 per call).
+        input_type: "document" for indexing, "query" for retrieval queries.
+    """
+    api_key = os.environ.get("VOYAGE_API_KEY", "")
     if not api_key:
-        raise RuntimeError("GOOGLE_API_KEY environment variable is not set")
-    genai.configure(api_key=api_key)
-    return genai
+        raise RuntimeError("VOYAGE_API_KEY environment variable is not set")
 
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            VOYAGE_API_URL,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "input": texts,
+                "model": VOYAGE_MODEL,
+                "input_type": input_type,
+                "output_dimension": EMBED_DIM,
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
-async def embed_text(text: str) -> list[float]:
-    """Call Gemini text-embedding-004 via the google-generativeai SDK and return the 768-dim vector."""
-    genai = _get_genai()
-    result = await asyncio.to_thread(
-        genai.embed_content,
-        model=GEMINI_MODEL,
-        content=text,
-        task_type="retrieval_document",
-    )
-    values = result["embedding"]
-    if len(values) != EMBED_DIM:
-        raise ValueError(f"Expected {EMBED_DIM}-dim vector, got {len(values)}")
-    return values
+    # Voyage returns {"data": [{"embedding": [...], "index": 0}, ...]}
+    items = sorted(data["data"], key=lambda x: x["index"])
+    vectors = [item["embedding"] for item in items]
 
+    for i, v in enumerate(vectors):
+        if len(v) != EMBED_DIM:
+            raise ValueError(f"Expected {EMBED_DIM}-dim vector at index {i}, got {len(v)}")
 
-async def _embed_patient(
-    session_factory: sessionmaker,
-    semaphore: asyncio.Semaphore,
-    patient_id: str,
-) -> None:
-    """Fetch patient data, build narrative, embed, and store in patients.embedding."""
-    async with semaphore:
-        async with session_factory() as session:
-            patient = await session.get(Patient, patient_id)
-            if patient is None:
-                return
-
-            cond_result = await session.execute(
-                select(PatientCondition).where(PatientCondition.patient_id == patient_id)
-            )
-            conditions = cond_result.scalars().all()
-
-            med_result = await session.execute(
-                select(PatientMedication).where(PatientMedication.patient_id == patient_id)
-            )
-            medications = med_result.scalars().all()
-
-            obs_result = await session.execute(
-                select(PatientObservation).where(PatientObservation.patient_id == patient_id)
-            )
-            observations = obs_result.scalars().all()
-
-        narrative = build_patient_narrative(patient, conditions, medications, observations)
-        if not narrative.strip():
-            logger.debug(f"patient {patient_id}: empty narrative, skipping")
-            return
-
-        vector = await embed_text(narrative)
-
-        # Store vector using raw SQL — pgvector needs the array cast
-        async with session_factory() as session:
-            async with session.begin():
-                await session.execute(
-                    sa_text(
-                        "UPDATE patients SET embedding = CAST(:vec AS vector) WHERE id = :pid"
-                    ),
-                    {"vec": str(vector), "pid": patient_id},
-                )
-
-    logger.debug(f"patient {patient_id}: embedded ({len(narrative)} chars)")
+    return vectors
 
 
 async def run_embedder(batch_size: Optional[int] = None) -> dict:
     """Embed all patients whose embedding column is NULL.
 
+    Fetches patient narratives in batches of BATCH_SIZE, calls Voyage AI once
+    per batch, and writes results to patients.embedding.
+
     Returns a summary dict with counts for success, skipped, and error.
     """
+    api_key = os.environ.get("VOYAGE_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("VOYAGE_API_KEY environment variable is not set")
+
     session_factory = get_session_factory()
-    semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
     # Fetch patients with NULL embedding
     async with session_factory() as session:
-        query = sa_text(
-            "SELECT id FROM patients WHERE embedding IS NULL ORDER BY indexed_at"
-        )
+        sql = "SELECT id FROM patients WHERE embedding IS NULL ORDER BY indexed_at"
         if batch_size:
-            query = sa_text(
-                "SELECT id FROM patients WHERE embedding IS NULL ORDER BY indexed_at LIMIT :lim"
-            ).bindparams(lim=batch_size)
-        result = await session.execute(query)
+            sql += f" LIMIT {batch_size}"
+        result = await session.execute(sa_text(sql))
         patient_ids = [row[0] for row in result.all()]
 
-    # Validate the API key works before launching 200 tasks
-    _get_genai()
-    logger.info(f"Embedding {len(patient_ids)} patients (batch_size={batch_size})...")
+    if not patient_ids:
+        logger.info("No patients need embedding — all done.")
+        return {"total": 0, "success": 0, "errors": 0}
 
-    tasks = [
-        asyncio.create_task(
-            _embed_patient(session_factory, semaphore, pid)
-        )
-        for pid in patient_ids
-    ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    logger.info(f"Building narratives for {len(patient_ids)} patients...")
 
-    errors = [r for r in results if isinstance(r, Exception)]
-    if errors:
-        logger.warning(f"{len(errors)}/{len(patient_ids)} patients failed to embed")
-        for e in errors[:3]:
-            logger.warning(f"  embed error: {e}")
+    # Build all narratives first
+    narratives: dict[str, str] = {}
+    async with session_factory() as session:
+        for pid in patient_ids:
+            patient = await session.get(Patient, pid)
+            if patient is None:
+                continue
 
-    summary = {
-        "total": len(patient_ids),
-        "success": len(patient_ids) - len(errors),
-        "errors": len(errors),
-    }
+            cond_r = await session.execute(
+                select(PatientCondition).where(PatientCondition.patient_id == pid)
+            )
+            med_r = await session.execute(
+                select(PatientMedication).where(PatientMedication.patient_id == pid)
+            )
+            obs_r = await session.execute(
+                select(PatientObservation).where(PatientObservation.patient_id == pid)
+            )
+            narrative = build_patient_narrative(
+                patient,
+                cond_r.scalars().all(),
+                med_r.scalars().all(),
+                obs_r.scalars().all(),
+            )
+            if narrative.strip():
+                narratives[pid] = narrative
+
+    ids_to_embed = list(narratives.keys())
+    texts_to_embed = [narratives[pid] for pid in ids_to_embed]
+    logger.info(f"Embedding {len(ids_to_embed)} patients in batches of {BATCH_SIZE}...")
+
+    success = 0
+    errors = 0
+
+    # Process in batches
+    for i in range(0, len(ids_to_embed), BATCH_SIZE):
+        batch_ids = ids_to_embed[i : i + BATCH_SIZE]
+        batch_texts = texts_to_embed[i : i + BATCH_SIZE]
+        batch_num = i // BATCH_SIZE + 1
+        total_batches = (len(ids_to_embed) + BATCH_SIZE - 1) // BATCH_SIZE
+
+        try:
+            logger.info(f"Batch {batch_num}/{total_batches}: embedding {len(batch_ids)} patients...")
+            vectors = await embed_texts(batch_texts, input_type="document")
+
+            # Write all vectors in this batch to DB
+            async with session_factory() as session:
+                async with session.begin():
+                    for pid, vector in zip(batch_ids, vectors):
+                        await session.execute(
+                            sa_text(
+                                "UPDATE patients SET embedding = CAST(:vec AS vector) WHERE id = :pid"
+                            ),
+                            {"vec": str(vector), "pid": pid},
+                        )
+            success += len(batch_ids)
+            logger.info(f"Batch {batch_num}/{total_batches}: wrote {len(batch_ids)} embeddings.")
+
+        except Exception as e:
+            logger.warning(f"Batch {batch_num}/{total_batches} failed: {e}")
+            errors += len(batch_ids)
+
+    summary = {"total": len(patient_ids), "success": success, "errors": errors}
     logger.info(f"Embedding complete: {summary}")
     return summary
 
