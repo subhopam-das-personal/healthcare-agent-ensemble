@@ -160,6 +160,7 @@ NL query → enricher.py → query_engine.py → SQL → results
 
 - Python 3.11+
 - `ANTHROPIC_API_KEY` — get one at [console.anthropic.com](https://console.anthropic.com)
+- PostgreSQL — required for the DDM / Find Patients tab. Set `DATABASE_URL=postgresql://user:pass@localhost:5432/ddm`. Demo mode and Clinical Review work without it.
 
 ### Setup
 
@@ -194,6 +195,7 @@ Open [localhost:8501](http://localhost:8501).
 | `MCP_SERVER_URL` | No | `http://localhost:8000` | MCP server base URL (no trailing `/mcp`) |
 | `A2A_AGENT_URL` | No | `http://localhost:8001` | A2A agent URL |
 | `MCP_API_KEY` | No | — | API key for MCP server auth |
+| `DATABASE_URL` | No | — | PostgreSQL connection string for DDM index. Required for Find Patients tab. Railway sets this automatically when you add a Postgres plugin to the MCP Server service. Format: `postgresql://user:pass@host:5432/db` |
 | `A2A_PUBLIC_URL` | No | — | Public URL for A2A agent (Railway sets this) |
 
 ---
@@ -206,7 +208,9 @@ The repo uses a single Docker image dispatched by `RAILWAY_SERVICE_NAME`. Each R
 ```
 ANTHROPIC_API_KEY=<key>
 MCP_API_KEY=clin-intel-2026
+DATABASE_URL=<set automatically by Railway Postgres plugin>
 ```
+Add a **Postgres** plugin to this service in the Railway dashboard — Railway injects `DATABASE_URL` automatically. The DDM runs migrations on startup (idempotent, safe to redeploy).
 
 **A2A Agent service** (`RAILWAY_SERVICE_NAME=a2a-agent`):
 ```
