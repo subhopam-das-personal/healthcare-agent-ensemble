@@ -594,6 +594,56 @@ async def enrich_patients(
 
 
 @mcp.tool(meta=_UI_META)
+async def embed_patients(
+    batch_size: int = 0,
+    ctx: Context = None,
+) -> str:
+    """Generate Gemini text-embedding-004 vectors for patients with NULL embeddings.
+
+    Builds a clinical narrative per patient (demographics, conditions, medications,
+    key labs) and calls the Google Generative AI embedding API (768-dim). Stores
+    vectors in patients.embedding, enabling HNSW semantic similarity search.
+
+    Requires GOOGLE_API_KEY environment variable on the MCP server service.
+    Runs in the background — this tool returns immediately.
+
+    Args:
+        batch_size: Max patients to embed (0 = embed all patients with NULL embedding)
+    """
+    logger.info(f"[embed_patients] batch_size={batch_size}")
+    try:
+        if ctx:
+            await ctx.info("Starting background embedding job (Gemini text-embedding-004)…")
+    except Exception:
+        pass
+
+    try:
+        import threading
+        from ddm.db import reset_engine
+        from ddm.embedder import run_embedder
+
+        _batch = batch_size if batch_size > 0 else None
+
+        def _run():
+            reset_engine()
+            result = asyncio.run(run_embedder(batch_size=_batch))
+            logger.info(f"[embed_patients] background job finished: {result}")
+
+        threading.Thread(target=_run, daemon=True, name="embedder").start()
+    except Exception as e:
+        logger.error(f"[embed_patients] failed to start: {e}")
+        return json.dumps({"error": str(e)}, indent=2)
+
+    return json.dumps({
+        "status": "started",
+        "batch_size": batch_size or "unlimited",
+        "model": "text-embedding-004",
+        "dimensions": 768,
+        "note": "Embedding runs in the background. Check patients.embedding column for progress.",
+    }, indent=2)
+
+
+@mcp.tool(meta=_UI_META)
 async def add_fhir_source(
     name: str,
     base_url: str,
