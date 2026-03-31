@@ -78,7 +78,7 @@ _VALID_COLS: dict[str, set[str]] = {
 @dataclass
 class QueryResult:
     patients: list[dict] = field(default_factory=list)
-    mode: str = "none"           # "structured" | "text_fallback" | "empty"
+    mode: str = "none"           # "structured" | "vector" | "text_fallback" | "empty"
     sql: Optional[str] = None    # SQL that ran (shown in transparency panel)
     expansion: dict = field(default_factory=dict)
     count: int = 0
@@ -299,6 +299,77 @@ async def _try_sql_path(
 
 
 # ---------------------------------------------------------------------------
+# Vector similarity search (Gemini embedding → pgvector HNSW)
+# ---------------------------------------------------------------------------
+
+GEMINI_EMBED_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+    "text-embedding-004:embedContent"
+)
+
+
+async def _embed_question(question: str) -> Optional[list[float]]:
+    """Embed the NL question via Gemini text-embedding-004 (768-dim).
+
+    Returns None if GOOGLE_API_KEY is not set or the API call fails.
+    """
+    api_key = os.environ.get("GOOGLE_API_KEY", "")
+    if not api_key:
+        return None
+    try:
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                GEMINI_EMBED_URL,
+                params={"key": api_key},
+                json={
+                    "model": "models/text-embedding-004",
+                    "content": {"parts": [{"text": question}]},
+                    "taskType": "RETRIEVAL_QUERY",
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()["embedding"]["values"]
+    except Exception as e:
+        logger.warning(f"Question embedding failed: {e}")
+        return None
+
+
+async def _vector_search(
+    vector: list[float], session: AsyncSession, limit: int = 20
+) -> list[dict]:
+    """Search patients by cosine similarity to the query vector.
+
+    Skips gracefully if no patients have embeddings yet.
+    """
+    # Check whether any embeddings exist first (avoids full seqscan on empty column)
+    check = await session.execute(
+        text("SELECT 1 FROM patients WHERE embedding IS NOT NULL LIMIT 1")
+    )
+    if not check.fetchone():
+        logger.info("No patient embeddings found — skipping vector search")
+        return []
+
+    try:
+        result = await session.execute(
+            text("""
+                SELECT id, given_name, family_name, birth_date, gender,
+                       1 - (embedding <=> CAST(:vec AS vector)) AS similarity
+                FROM patients
+                WHERE embedding IS NOT NULL
+                ORDER BY embedding <=> CAST(:vec AS vector)
+                LIMIT :lim
+            """),
+            {"vec": str(vector), "lim": limit},
+        )
+        rows = result.mappings().all()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning(f"Vector search failed: {e}")
+        return []
+
+
+# ---------------------------------------------------------------------------
 # Text fallback (ILIKE across condition/medication displays)
 # ---------------------------------------------------------------------------
 
@@ -386,8 +457,23 @@ async def query_patients(question: str) -> QueryResult:
                 count=len(serialised),
             )
 
-        # Step 4 — text fallback
-        logger.info("SQL path returned no results; falling back to text search")
+        # Step 4 — vector similarity search
+        logger.info("SQL path returned no results; trying vector similarity search")
+        query_vector = await _embed_question(question)
+        if query_vector:
+            patients = await _vector_search(query_vector, session)
+            if patients:
+                serialised = [_serialize_row(p) for p in patients]
+                return QueryResult(
+                    patients=serialised,
+                    mode="vector",
+                    sql=None,
+                    expansion=expansion,
+                    count=len(serialised),
+                )
+
+        # Step 5 — text fallback
+        logger.info("Vector search returned no results; falling back to text search")
         patients = await _text_fallback(entities, session)
         serialised = [_serialize_row(p) for p in patients]
         return QueryResult(

@@ -694,7 +694,11 @@ with _tab_query:
         else:
             count = result.get("count", 0)
             mode = result.get("mode", "")
-            mode_label = {"structured": "✅ SQL", "text_fallback": "🔤 Text search"}.get(mode, mode)
+            mode_label = {
+                "structured": "✅ SQL",
+                "vector": "🧠 Semantic",
+                "text_fallback": "🔤 Text search",
+            }.get(mode, mode)
             patients = result.get("patients", [])
             expansion = result.get("expansion", {})
 
