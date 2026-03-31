@@ -307,7 +307,7 @@ async def _embed_question(question: str) -> Optional[list[float]]:
 
     Returns None if VOYAGE_API_KEY is not set or the API call fails.
     """
-    if not os.environ.get("VOYAGE_API_KEY"):
+    if not os.environ.get("VOYAGE_EMBEDDING_API_KEY"):
         return None
     try:
         from ddm.embedder import embed_texts

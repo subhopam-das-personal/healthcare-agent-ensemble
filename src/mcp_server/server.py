@@ -605,7 +605,7 @@ async def embed_patients(
     patients in batches of 100 — 200 patients = 2 API calls. Stores vectors in
     patients.embedding, enabling HNSW semantic similarity search.
 
-    Requires VOYAGE_API_KEY environment variable on the MCP server service.
+    Requires VOYAGE_EMBEDDING_API_KEY environment variable on the MCP server service.
     Runs in the background — this tool returns immediately.
 
     Args:
@@ -638,7 +638,7 @@ async def embed_patients(
     return json.dumps({
         "status": "started",
         "batch_size": batch_size or "unlimited",
-        "model": "voyage-3",
+        "model": "voyage-3.5-lite",
         "dimensions": 768,
         "note": "Embedding runs in the background. Check patients.embedding column for progress.",
     }, indent=2)

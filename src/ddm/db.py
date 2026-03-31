@@ -72,18 +72,28 @@ def get_session_factory() -> sessionmaker:
     return _SessionLocal
 
 
+def _find_all_migration_files() -> list[pathlib.Path]:
+    """Return all migrations/00N_*.sql files sorted by name."""
+    migration_dir = _MIGRATION_FILE.parent
+    if not migration_dir.exists():
+        return []
+    return sorted(migration_dir.glob("0*.sql"))
+
+
 def run_migrations_sync() -> None:
-    """Run the DDM schema migration synchronously via psycopg2.
+    """Run all DDM schema migrations synchronously via psycopg2.
 
     Safe to call before the async event loop starts (e.g. in __main__ before uvicorn).
-    Uses IF NOT EXISTS throughout — idempotent on every deploy.
+    Runs every *.sql file in migrations/ in order. Statements are idempotent
+    (IF NOT EXISTS / DROP IF EXISTS) so re-running is safe.
     """
     if not os.environ.get("DATABASE_URL"):
         logger.warning("DATABASE_URL not set — skipping DDM migrations")
         return
 
-    if not _MIGRATION_FILE.exists():
-        logger.warning(f"Migration file not found: {_MIGRATION_FILE}")
+    migration_files = _find_all_migration_files()
+    if not migration_files:
+        logger.warning(f"No migration files found near {_MIGRATION_FILE}")
         return
 
     try:
@@ -91,14 +101,16 @@ def run_migrations_sync() -> None:
         conn = psycopg2.connect(_sync_db_url())
         conn.autocommit = True
         cur = conn.cursor()
-        sql = _MIGRATION_FILE.read_text()
-        for stmt in [s.strip() for s in sql.split(";") if s.strip()]:
-            try:
-                cur.execute(stmt)
-            except Exception as e:
-                logger.debug(f"DDL skipped ({e}): {stmt[:60]}…")
+        for mf in migration_files:
+            sql = mf.read_text()
+            for stmt in [s.strip() for s in sql.split(";") if s.strip()]:
+                try:
+                    cur.execute(stmt)
+                except Exception as e:
+                    logger.debug(f"DDL skipped ({e}): {stmt[:60]}…")
+            logger.info(f"DDM migration applied: {mf.name}")
         conn.close()
-        logger.info("DDM migrations applied (sync)")
+        logger.info("DDM migrations complete (sync)")
     except ImportError:
         logger.warning("psycopg2 not installed — skipping sync migration")
     except Exception as e:

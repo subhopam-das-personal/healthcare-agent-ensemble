@@ -28,8 +28,8 @@ from .schema import Patient, PatientCondition, PatientMedication, PatientObserva
 logger = logging.getLogger(__name__)
 
 VOYAGE_API_URL = "https://api.voyageai.com/v1/embeddings"
-VOYAGE_MODEL = "voyage-3"
-EMBED_DIM = 768          # matches patients.embedding vector(768)
+VOYAGE_MODEL = "voyage-3.5-lite"
+EMBED_DIM = 512          # matches patients.embedding vector(512)
 BATCH_SIZE = 100         # Voyage supports up to 128 inputs per request
 
 
@@ -90,9 +90,9 @@ async def embed_texts(texts: list[str], input_type: str = "document") -> list[li
         texts: List of strings to embed (max 128 per call).
         input_type: "document" for indexing, "query" for retrieval queries.
     """
-    api_key = os.environ.get("VOYAGE_API_KEY", "")
+    api_key = os.environ.get("VOYAGE_EMBEDDING_API_KEY", "")
     if not api_key:
-        raise RuntimeError("VOYAGE_API_KEY environment variable is not set")
+        raise RuntimeError("VOYAGE_EMBEDDING_API_KEY environment variable is not set")
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(
@@ -102,7 +102,8 @@ async def embed_texts(texts: list[str], input_type: str = "document") -> list[li
                 "input": texts,
                 "model": VOYAGE_MODEL,
                 "input_type": input_type,
-                "output_dimension": EMBED_DIM,
+                # voyage-3.5-lite native dim is 512 — no truncation needed
+                # "output_dimension" omitted to use model default
             },
         )
         resp.raise_for_status()
@@ -127,9 +128,9 @@ async def run_embedder(batch_size: Optional[int] = None) -> dict:
 
     Returns a summary dict with counts for success, skipped, and error.
     """
-    api_key = os.environ.get("VOYAGE_API_KEY", "")
+    api_key = os.environ.get("VOYAGE_EMBEDDING_API_KEY", "")
     if not api_key:
-        raise RuntimeError("VOYAGE_API_KEY environment variable is not set")
+        raise RuntimeError("VOYAGE_EMBEDDING_API_KEY environment variable is not set")
 
     session_factory = get_session_factory()
 
