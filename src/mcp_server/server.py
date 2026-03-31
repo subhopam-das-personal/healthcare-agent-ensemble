@@ -547,6 +547,53 @@ async def index_fhir_source(
 
 
 @mcp.tool(meta=_UI_META)
+async def enrich_patients(
+    batch_size: int = 0,
+    ctx: Context = None,
+) -> str:
+    """Run Phase 2 enrichment: populate SNOMED ancestors and drug classes for indexed patients.
+
+    Fetches SNOMED parent codes (up to 3 levels) from NLM tx.fhir.org for every
+    patient condition that has a SNOMED code but no ancestors. Fetches ATC/NDFRT drug
+    class for every medication with an RxNorm code but no class. Results are cached in
+    ontology_cache and drug_class_map tables so repeat runs skip already-enriched rows.
+
+    Runs in the background — this tool returns immediately.
+
+    Args:
+        batch_size: Max conditions/medications to enrich (0 = enrich everything unenriched)
+    """
+    logger.info(f"[enrich_patients] batch_size={batch_size}")
+    try:
+        if ctx:
+            await ctx.info("Starting background enrichment (SNOMED ancestors + drug classes)…")
+    except Exception:
+        pass
+
+    try:
+        import threading
+        from ddm.db import reset_engine
+        from ddm.enricher import run_enricher
+
+        _batch = batch_size if batch_size > 0 else None
+
+        def _run():
+            reset_engine()
+            asyncio.run(run_enricher(batch_size=_batch))
+
+        threading.Thread(target=_run, daemon=True, name="enricher").start()
+    except Exception as e:
+        logger.error(f"[enrich_patients] failed to start: {e}")
+        return json.dumps({"error": str(e)}, indent=2)
+
+    return json.dumps({
+        "status": "started",
+        "batch_size": batch_size or "unlimited",
+        "note": "Enrichment runs in the background. Check ontology_cache and drug_class_map tables for progress.",
+    }, indent=2)
+
+
+@mcp.tool(meta=_UI_META)
 async def add_fhir_source(
     name: str,
     base_url: str,

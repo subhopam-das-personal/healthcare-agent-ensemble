@@ -22,6 +22,7 @@ from typing import Optional
 import httpx
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.orm import sessionmaker
 
 from .db import get_engine, get_session_factory
 from .schema import (
