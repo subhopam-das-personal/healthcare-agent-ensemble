@@ -84,7 +84,9 @@ def build_patient_narrative(
 
 
 async def embed_texts(texts: list[str], input_type: str = "document") -> list[list[float]]:
-    """Call Voyage AI and return a list of 768-dim vectors (one per input text).
+    """Call Voyage AI and return a list of 512-dim vectors (one per input text).
+
+    Retries up to 4 times on 429 rate-limit responses with exponential backoff.
 
     Args:
         texts: List of strings to embed (max 128 per call).
@@ -94,30 +96,38 @@ async def embed_texts(texts: list[str], input_type: str = "document") -> list[li
     if not api_key:
         raise RuntimeError("VOYAGE_EMBEDDING_API_KEY environment variable is not set")
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            VOYAGE_API_URL,
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "input": texts,
-                "model": VOYAGE_MODEL,
-                "input_type": input_type,
-                # voyage-3.5-lite native dim is 512 — no truncation needed
-                # "output_dimension" omitted to use model default
-            },
-        )
+    max_retries = 4
+    for attempt in range(max_retries):
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                VOYAGE_API_URL,
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "input": texts,
+                    "model": VOYAGE_MODEL,
+                    "input_type": input_type,
+                    # voyage-3.5-lite native dim is 512 — no truncation needed
+                },
+            )
+
+        if resp.status_code == 429:
+            wait = int(resp.headers.get("retry-after", 2 ** (attempt + 1)))
+            logger.warning(f"Voyage rate limit hit (attempt {attempt+1}/{max_retries}), waiting {wait}s...")
+            await asyncio.sleep(wait)
+            continue
+
         resp.raise_for_status()
         data = resp.json()
+        items = sorted(data["data"], key=lambda x: x["index"])
+        vectors = [item["embedding"] for item in items]
 
-    # Voyage returns {"data": [{"embedding": [...], "index": 0}, ...]}
-    items = sorted(data["data"], key=lambda x: x["index"])
-    vectors = [item["embedding"] for item in items]
+        for i, v in enumerate(vectors):
+            if len(v) != EMBED_DIM:
+                raise ValueError(f"Expected {EMBED_DIM}-dim vector at index {i}, got {len(v)}")
 
-    for i, v in enumerate(vectors):
-        if len(v) != EMBED_DIM:
-            raise ValueError(f"Expected {EMBED_DIM}-dim vector at index {i}, got {len(v)}")
+        return vectors
 
-    return vectors
+    raise RuntimeError(f"Voyage API rate limit exceeded after {max_retries} retries")
 
 
 async def run_embedder(batch_size: Optional[int] = None) -> dict:
@@ -204,6 +214,8 @@ async def run_embedder(batch_size: Optional[int] = None) -> dict:
                         )
             success += len(batch_ids)
             logger.info(f"Batch {batch_num}/{total_batches}: wrote {len(batch_ids)} embeddings.")
+            if batch_num < total_batches:
+                await asyncio.sleep(1)  # brief pause between batches
 
         except Exception as e:
             logger.warning(f"Batch {batch_num}/{total_batches} failed: {e}")
