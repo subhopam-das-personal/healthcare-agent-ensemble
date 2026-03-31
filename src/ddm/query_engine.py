@@ -302,10 +302,7 @@ async def _try_sql_path(
 # Vector similarity search (Gemini embedding → pgvector HNSW)
 # ---------------------------------------------------------------------------
 
-GEMINI_EMBED_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    "text-embedding-004:embedContent"
-)
+GEMINI_EMBED_MODEL = "models/text-embedding-004"
 
 
 async def _embed_question(question: str) -> Optional[list[float]]:
@@ -317,19 +314,16 @@ async def _embed_question(question: str) -> Optional[list[float]]:
     if not api_key:
         return None
     try:
-        import httpx as _httpx
-        async with _httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                GEMINI_EMBED_URL,
-                params={"key": api_key},
-                json={
-                    "model": "models/text-embedding-004",
-                    "content": {"parts": [{"text": question}]},
-                    "taskType": "RETRIEVAL_QUERY",
-                },
-            )
-            resp.raise_for_status()
-            return resp.json()["embedding"]["values"]
+        import asyncio as _asyncio
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        result = await _asyncio.to_thread(
+            genai.embed_content,
+            model=GEMINI_EMBED_MODEL,
+            content=question,
+            task_type="retrieval_query",
+        )
+        return result["embedding"]
     except Exception as e:
         logger.warning(f"Question embedding failed: {e}")
         return None

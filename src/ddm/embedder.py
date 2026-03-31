@@ -16,7 +16,6 @@ import sys
 from datetime import date
 from typing import Optional
 
-import httpx
 from sqlalchemy import select, text as sa_text
 from sqlalchemy.orm import sessionmaker
 
@@ -25,10 +24,7 @@ from .schema import Patient, PatientCondition, PatientMedication, PatientObserva
 
 logger = logging.getLogger(__name__)
 
-GEMINI_EMBED_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    "text-embedding-004:embedContent"
-)
+GEMINI_MODEL = "models/text-embedding-004"
 MAX_CONCURRENCY = 4   # simultaneous Gemini API calls
 EMBED_DIM = 768
 
@@ -94,24 +90,31 @@ def build_patient_narrative(
     return " ".join(parts)
 
 
-async def embed_text(
-    client: httpx.AsyncClient,
-    api_key: str,
-    text: str,
-) -> list[float]:
-    """Call Gemini text-embedding-004 and return the 768-dim vector."""
-    resp = await client.post(
-        GEMINI_EMBED_URL,
-        params={"key": api_key},
-        json={
-            "model": "models/text-embedding-004",
-            "content": {"parts": [{"text": text}]},
-            "taskType": "RETRIEVAL_DOCUMENT",
-        },
-        timeout=20.0,
+def _get_genai():
+    """Import and configure the google-generativeai client (lazy, so import errors surface clearly)."""
+    try:
+        import google.generativeai as genai
+    except ImportError:
+        raise RuntimeError(
+            "google-generativeai is not installed. Add it to requirements.txt."
+        )
+    api_key = os.environ.get("GOOGLE_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("GOOGLE_API_KEY environment variable is not set")
+    genai.configure(api_key=api_key)
+    return genai
+
+
+async def embed_text(text: str) -> list[float]:
+    """Call Gemini text-embedding-004 via the google-generativeai SDK and return the 768-dim vector."""
+    genai = _get_genai()
+    result = await asyncio.to_thread(
+        genai.embed_content,
+        model=GEMINI_MODEL,
+        content=text,
+        task_type="retrieval_document",
     )
-    resp.raise_for_status()
-    values = resp.json()["embedding"]["values"]
+    values = result["embedding"]
     if len(values) != EMBED_DIM:
         raise ValueError(f"Expected {EMBED_DIM}-dim vector, got {len(values)}")
     return values
@@ -119,8 +122,6 @@ async def embed_text(
 
 async def _embed_patient(
     session_factory: sessionmaker,
-    client: httpx.AsyncClient,
-    api_key: str,
     semaphore: asyncio.Semaphore,
     patient_id: str,
 ) -> None:
@@ -151,7 +152,7 @@ async def _embed_patient(
             logger.debug(f"patient {patient_id}: empty narrative, skipping")
             return
 
-        vector = await embed_text(client, api_key, narrative)
+        vector = await embed_text(narrative)
 
         # Store vector using raw SQL — pgvector needs the array cast
         async with session_factory() as session:
@@ -171,10 +172,6 @@ async def run_embedder(batch_size: Optional[int] = None) -> dict:
 
     Returns a summary dict with counts for success, skipped, and error.
     """
-    api_key = os.environ.get("GOOGLE_API_KEY", "")
-    if not api_key:
-        raise RuntimeError("GOOGLE_API_KEY environment variable is not set")
-
     session_factory = get_session_factory()
     semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
@@ -190,16 +187,17 @@ async def run_embedder(batch_size: Optional[int] = None) -> dict:
         result = await session.execute(query)
         patient_ids = [row[0] for row in result.all()]
 
+    # Validate the API key works before launching 200 tasks
+    _get_genai()
     logger.info(f"Embedding {len(patient_ids)} patients (batch_size={batch_size})...")
 
-    async with httpx.AsyncClient() as client:
-        tasks = [
-            asyncio.create_task(
-                _embed_patient(session_factory, client, api_key, semaphore, pid)
-            )
-            for pid in patient_ids
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+    tasks = [
+        asyncio.create_task(
+            _embed_patient(session_factory, semaphore, pid)
+        )
+        for pid in patient_ids
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
     errors = [r for r in results if isinstance(r, Exception)]
     if errors:
