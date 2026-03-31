@@ -106,12 +106,12 @@ async def embed_texts(texts: list[str], input_type: str = "document") -> list[li
                     "input": texts,
                     "model": VOYAGE_MODEL,
                     "input_type": input_type,
-                    # voyage-3.5-lite native dim is 512 — no truncation needed
+                "output_dimension": EMBED_DIM,
                 },
             )
 
         if resp.status_code == 429:
-            wait = int(resp.headers.get("retry-after", 2 ** (attempt + 1)))
+            wait = int(resp.headers.get("retry-after", 5 * (attempt + 1)))
             logger.warning(f"Voyage rate limit hit (attempt {attempt+1}/{max_retries}), waiting {wait}s...")
             await asyncio.sleep(wait)
             continue
