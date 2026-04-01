@@ -638,7 +638,7 @@ async def embed_patients(
     return json.dumps({
         "status": "started",
         "batch_size": batch_size or "unlimited",
-        "model": "voyage-3.5-lite",
+        "model": "voyage-3-lite",
         "dimensions": 768,
         "note": "Embedding runs in the background. Check patients.embedding column for progress.",
     }, indent=2)

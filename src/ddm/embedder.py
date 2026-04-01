@@ -28,9 +28,9 @@ from .schema import Patient, PatientCondition, PatientMedication, PatientObserva
 logger = logging.getLogger(__name__)
 
 VOYAGE_API_URL = "https://api.voyageai.com/v1/embeddings"
-VOYAGE_MODEL = "voyage-3.5-lite"
-EMBED_DIM = 512          # matches patients.embedding vector(512)
-BATCH_SIZE = 100         # Voyage supports up to 128 inputs per request
+VOYAGE_MODEL = "voyage-3-lite"
+EMBED_DIM = 512          # voyage-3-lite native output — matches patients.embedding vector(512)
+BATCH_SIZE = 128         # Voyage max per request; 200 patients = 2 calls with 16M TPM headroom
 
 
 def _compute_age(birth_date: Optional[date]) -> Optional[int]:
@@ -106,7 +106,7 @@ async def embed_texts(texts: list[str], input_type: str = "document") -> list[li
                     "input": texts,
                     "model": VOYAGE_MODEL,
                     "input_type": input_type,
-                "output_dimension": EMBED_DIM,
+                # voyage-3-lite native output is 512-dim — no truncation needed
                 },
             )
 
