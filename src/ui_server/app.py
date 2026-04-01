@@ -317,22 +317,68 @@ MCP_SERVER_URL = os.environ.get(
 MCP_API_KEY = os.environ.get("MCP_API_KEY", "")
 
 
-def _mcp_call(tool: str, arguments: dict) -> dict:
-    """Synchronous JSON-RPC call to the MCP server."""
+def _mcp_base_headers() -> dict:
+    h = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "MCP-Protocol-Version": "2025-03-26",
+    }
+    if MCP_API_KEY:
+        h["X-API-Key"] = MCP_API_KEY
+    return h
+
+
+def _mcp_session_id() -> str:
+    """Return a cached MCP session ID, initializing if needed."""
+    if "mcp_session_id" not in st.session_state:
+        st.session_state.mcp_session_id = None
+
+    if st.session_state.mcp_session_id:
+        return st.session_state.mcp_session_id
+
     import uuid as _uuid
+    payload = {
+        "jsonrpc": "2.0",
+        "id": str(_uuid.uuid4()),
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "ui-server", "version": "1.0"},
+        },
+    }
+    resp = httpx.post(
+        f"{MCP_SERVER_URL}/mcp",
+        json=payload,
+        headers=_mcp_base_headers(),
+        timeout=15.0,
+    )
+    resp.raise_for_status()
+    session_id = resp.headers.get("mcp-session-id", "")
+    if not session_id:
+        raise RuntimeError("MCP server did not return a session ID on initialize")
+    st.session_state.mcp_session_id = session_id
+    return session_id
+
+
+def _mcp_call(tool: str, arguments: dict) -> dict:
+    """Synchronous JSON-RPC call to the MCP server (session-aware)."""
+    import uuid as _uuid
+
+    try:
+        session_id = _mcp_session_id()
+    except Exception as e:
+        return {"error": f"MCP session init failed: {e}"}
+
+    headers = _mcp_base_headers()
+    headers["mcp-session-id"] = session_id
+
     payload = {
         "jsonrpc": "2.0",
         "id": str(_uuid.uuid4()),
         "method": "tools/call",
         "params": {"name": tool, "arguments": arguments},
     }
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-        "mcp-protocol-version": "2025-03-26",
-    }
-    if MCP_API_KEY:
-        headers["X-API-Key"] = MCP_API_KEY
     try:
         resp = httpx.post(
             f"{MCP_SERVER_URL}/mcp",
@@ -340,13 +386,41 @@ def _mcp_call(tool: str, arguments: dict) -> dict:
             headers=headers,
             timeout=60.0,
         )
+        # Session expired — clear and retry once
+        if resp.status_code == 404:
+            st.session_state.mcp_session_id = None
+            session_id = _mcp_session_id()
+            headers["mcp-session-id"] = session_id
+            resp = httpx.post(
+                f"{MCP_SERVER_URL}/mcp",
+                json=payload,
+                headers=headers,
+                timeout=60.0,
+            )
         resp.raise_for_status()
-        data = resp.json()
+
+        # Response may be SSE (text/event-stream) or plain JSON
+        content_type = resp.headers.get("content-type", "")
+        if "text/event-stream" in content_type:
+            # Extract the last data: line that contains the result
+            result_text = None
+            for line in resp.text.splitlines():
+                if line.startswith("data:"):
+                    result_text = line[len("data:"):].strip()
+            if result_text:
+                data = json.loads(result_text)
+            else:
+                return {"error": "Empty SSE response"}
+        else:
+            data = resp.json()
+
         content = data.get("result", {}).get("content", [])
         if content:
             return json.loads(content[0].get("text", "{}"))
         return data.get("result", {})
     except Exception as e:
+        # Clear session on unexpected errors so next call re-initializes
+        st.session_state.mcp_session_id = None
         return {"error": str(e)}
 
 
