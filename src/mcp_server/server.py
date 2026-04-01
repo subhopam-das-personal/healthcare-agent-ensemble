@@ -454,6 +454,7 @@ async def get_trial_details_tool(
 @mcp.tool(meta=_UI_META)
 async def nl_query_patients(
     question: str,
+    search_mode: str = "auto",
     ctx: Context = None,
 ) -> str:
     """Search the indexed patient cohort using plain English clinical queries.
@@ -466,8 +467,11 @@ async def nl_query_patients(
     Args:
         question: Natural language clinical question, e.g.
                   "patients with heart failure on ACE inhibitors who have elevated creatinine"
+        search_mode: "auto" (default) — SQL → vector → text_fallback;
+                     "vector" — skip SQL, pure semantic cosine search;
+                     "hybrid" — SQL candidates re-ranked by cosine similarity
     """
-    logger.info(f"[nl_query_patients] question={question!r}")
+    logger.info(f"[nl_query_patients] question={question!r} search_mode={search_mode!r}")
     try:
         if ctx:
             await ctx.info("Extracting medical entities from query…")
@@ -476,7 +480,7 @@ async def nl_query_patients(
 
     try:
         from ddm.query_engine import query_patients
-        result = await query_patients(question)
+        result = await query_patients(question, search_mode=search_mode)
     except Exception as e:
         logger.error(f"[nl_query_patients] query failed: {e}")
         return json.dumps({"error": str(e), "patients": []}, indent=2)

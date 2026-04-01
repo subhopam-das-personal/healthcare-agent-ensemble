@@ -1,0 +1,95 @@
+{
+  "_comment": "Hand-labeled evaluation queries for nl_query_patients. Each entry has a natural-language question and the set of patient IDs that are the ground-truth relevant results. relevant_ids is a list of known-relevant patient IDs; any_of_relevant is the minimum number that must appear in the top-K for a hit to count (default 1). Use 'notes' to document why each patient is relevant.",
+  "queries": [
+    {
+      "id": "q01",
+      "question": "patients with type 2 diabetes",
+      "relevant_ids": [],
+      "notes": "Populate with patient IDs that have ICD-10 E11.x or SNOMED 44054006"
+    },
+    {
+      "id": "q02",
+      "question": "patients on metformin",
+      "relevant_ids": [],
+      "notes": "Populate with patient IDs that have metformin in patient_medications"
+    },
+    {
+      "id": "q03",
+      "question": "patients with heart failure",
+      "relevant_ids": [],
+      "notes": "ICD-10 I50.x or SNOMED 84114007"
+    },
+    {
+      "id": "q04",
+      "question": "patients with hypertension on ACE inhibitors",
+      "relevant_ids": [],
+      "notes": "Conditions include hypertension AND medications include ACE inhibitor drug class"
+    },
+    {
+      "id": "q05",
+      "question": "patients with elevated creatinine",
+      "relevant_ids": [],
+      "notes": "patient_observations loinc 2160-0 (creatinine) with value > normal range"
+    },
+    {
+      "id": "q06",
+      "question": "patients with chronic kidney disease",
+      "relevant_ids": [],
+      "notes": "ICD-10 N18.x or SNOMED 709044004"
+    },
+    {
+      "id": "q07",
+      "question": "female patients over 65 with osteoporosis",
+      "relevant_ids": [],
+      "notes": "gender=female, age derived from birth_date, ICD-10 M81.x"
+    },
+    {
+      "id": "q08",
+      "question": "patients with asthma on corticosteroids",
+      "relevant_ids": [],
+      "notes": "conditions include asthma AND medications include corticosteroid drug class"
+    },
+    {
+      "id": "q09",
+      "question": "patients with atrial fibrillation on anticoagulants",
+      "relevant_ids": [],
+      "notes": "ICD-10 I48.x AND anticoagulant drug class"
+    },
+    {
+      "id": "q10",
+      "question": "patients with depression on SSRIs",
+      "relevant_ids": [],
+      "notes": "ICD-10 F32.x/F33.x AND SSRI drug class"
+    },
+    {
+      "id": "q11",
+      "question": "patients with COPD",
+      "relevant_ids": [],
+      "notes": "ICD-10 J44.x or SNOMED 13645005"
+    },
+    {
+      "id": "q12",
+      "question": "patients with high HbA1c",
+      "relevant_ids": [],
+      "notes": "patient_observations loinc 4548-4 (HbA1c) with value > 6.5"
+    },
+    {
+      "id": "q13",
+      "question": "patients with both diabetes and heart failure",
+      "relevant_ids": [],
+      "notes": "Compound query: both conditions must be present"
+    },
+    {
+      "id": "q14",
+      "question": "patients with hypothyroidism on levothyroxine",
+      "relevant_ids": [],
+      "notes": "ICD-10 E03.x AND levothyroxine medication"
+    },
+    {
+      "id": "q15",
+      "question": "patients with anxiety or depression",
+      "relevant_ids": [],
+      "notes": "ICD-10 F40.x/F41.x or F32.x/F33.x — either condition qualifies"
+    }
+  ]
+}

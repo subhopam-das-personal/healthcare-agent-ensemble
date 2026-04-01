@@ -84,6 +84,13 @@ class QueryResult:
     count: int = 0
 
 
+# Search modes:
+#   "auto"   — full pipeline: SQL → vector → text_fallback  (default)
+#   "vector" — skip SQL entirely, pure semantic cosine search
+#   "hybrid" — SQL gets candidates, vector re-ranks by cosine similarity
+SearchMode = str
+
+
 # ---------------------------------------------------------------------------
 # Entity extraction (Claude Haiku)
 # ---------------------------------------------------------------------------
@@ -407,11 +414,22 @@ def _serialize_row(row: dict) -> dict:
 # Public API
 # ---------------------------------------------------------------------------
 
-async def query_patients(question: str) -> QueryResult:
-    """Run the full hybrid query pipeline for a natural language clinical question."""
+async def query_patients(
+    question: str, search_mode: SearchMode = "auto"
+) -> QueryResult:
+    """Run the hybrid query pipeline for a natural language clinical question.
+
+    search_mode:
+      "auto"   — full pipeline: SQL → vector → text_fallback  (default)
+      "vector" — skip SQL entirely, pure semantic cosine search
+      "hybrid" — SQL gets up to 50 candidates, vector re-ranks by cosine similarity
+    """
+    if search_mode not in ("auto", "vector", "hybrid"):
+        raise ValueError(f"search_mode must be 'auto', 'vector', or 'hybrid'; got {search_mode!r}")
+
     session_factory = get_session_factory()
 
-    # Step 1 — entity extraction
+    # Step 1 — entity extraction (needed for all modes for expansion metadata)
     entities = await _extract_entities(question)
     logger.info(f"Entities extracted: {entities}")
 
@@ -424,7 +442,103 @@ async def query_patients(question: str) -> QueryResult:
             f"{len(expansion['loinc_codes'])} LOINC"
         )
 
-        # Step 3 — SQL path
+        # ------------------------------------------------------------------ #
+        # "vector" mode — skip SQL entirely, pure semantic search
+        # ------------------------------------------------------------------ #
+        if search_mode == "vector":
+            logger.info("search_mode=vector: skipping SQL, running vector search only")
+            query_vector = await _embed_question(question)
+            if query_vector:
+                patients = await _vector_search(query_vector, session)
+                if patients:
+                    serialised = [_serialize_row(p) for p in patients]
+                    return QueryResult(
+                        patients=serialised,
+                        mode="vector",
+                        sql=None,
+                        expansion=expansion,
+                        count=len(serialised),
+                    )
+            # Fall through to text fallback if embedding unavailable
+            logger.info("Vector search unavailable; falling back to text search")
+            patients = await _text_fallback(entities, session)
+            serialised = [_serialize_row(p) for p in patients]
+            return QueryResult(
+                patients=serialised,
+                mode="text_fallback",
+                sql=None,
+                expansion=expansion,
+                count=len(serialised),
+            )
+
+        # ------------------------------------------------------------------ #
+        # "hybrid" mode — SQL candidates → vector re-rank
+        # ------------------------------------------------------------------ #
+        if search_mode == "hybrid":
+            logger.info("search_mode=hybrid: running SQL then vector re-rank")
+            sql = await _generate_sql(question, expansion)
+            sql_patients: list[dict] = []
+            if sql:
+                raw = await _try_sql_path(sql, session)
+                sql_patients = raw or []
+
+            query_vector = await _embed_question(question)
+            if query_vector and sql_patients:
+                # Re-rank SQL candidates by cosine similarity using pgvector.
+                # We need the patient IDs that SQL returned; then fetch their
+                # embeddings and sort by distance.
+                ids = [p["id"] for p in sql_patients]
+                placeholders = ", ".join(f":id{i}" for i in range(len(ids)))
+                params: dict = {f"id{i}": v for i, v in enumerate(ids)}
+                params["vec"] = str(query_vector)
+                result = await session.execute(
+                    text(f"""
+                        SELECT id, given_name, family_name, birth_date, gender,
+                               1 - (embedding <=> CAST(:vec AS vector)) AS similarity
+                        FROM patients
+                        WHERE id IN ({placeholders}) AND embedding IS NOT NULL
+                        ORDER BY embedding <=> CAST(:vec AS vector)
+                    """),
+                    params,
+                )
+                reranked = [_serialize_row(dict(r)) for r in result.mappings().all()]
+                # Append any SQL rows that had no embedding (preserve coverage)
+                reranked_ids = {r["id"] for r in reranked}
+                for p in sql_patients:
+                    if p["id"] not in reranked_ids:
+                        reranked.append(_serialize_row(p))
+                if reranked:
+                    return QueryResult(
+                        patients=reranked,
+                        mode="hybrid",
+                        sql=sql,
+                        expansion=expansion,
+                        count=len(reranked),
+                    )
+
+            # Fallback: return SQL results without re-rank (or text if SQL empty)
+            if sql_patients:
+                serialised = [_serialize_row(p) for p in sql_patients]
+                return QueryResult(
+                    patients=serialised,
+                    mode="structured",
+                    sql=sql,
+                    expansion=expansion,
+                    count=len(serialised),
+                )
+            patients = await _text_fallback(entities, session)
+            serialised = [_serialize_row(p) for p in patients]
+            return QueryResult(
+                patients=serialised,
+                mode="text_fallback",
+                sql=None,
+                expansion=expansion,
+                count=len(serialised),
+            )
+
+        # ------------------------------------------------------------------ #
+        # "auto" mode — full pipeline: SQL → vector → text_fallback
+        # ------------------------------------------------------------------ #
         sql = await _generate_sql(question, expansion)
         patients = None
         if sql:
@@ -440,7 +554,6 @@ async def query_patients(question: str) -> QueryResult:
                 count=len(serialised),
             )
 
-        # Step 4 — vector similarity search
         logger.info("SQL path returned no results; trying vector similarity search")
         query_vector = await _embed_question(question)
         if query_vector:
@@ -455,7 +568,6 @@ async def query_patients(question: str) -> QueryResult:
                     count=len(serialised),
                 )
 
-        # Step 5 — text fallback
         logger.info("Vector search returned no results; falling back to text search")
         patients = await _text_fallback(entities, session)
         serialised = [_serialize_row(p) for p in patients]
@@ -476,7 +588,8 @@ if __name__ == "__main__":
     import asyncio
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s")
     q = sys.argv[1] if len(sys.argv) > 1 else "patients with diabetes on metformin"
-    result = asyncio.run(query_patients(q))
+    mode = sys.argv[2] if len(sys.argv) > 2 else "auto"
+    result = asyncio.run(query_patients(q, search_mode=mode))
     print(f"\nMode: {result.mode}  Count: {result.count}")
     print(f"Expansion: {result.expansion}")
     if result.sql:
