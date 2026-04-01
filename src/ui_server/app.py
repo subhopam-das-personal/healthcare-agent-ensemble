@@ -454,6 +454,8 @@ if "analysis_context" not in st.session_state:
     st.session_state.analysis_context = ""
 if "analysis_done" not in st.session_state:
     st.session_state.analysis_done = False
+if "patient_id_input" not in st.session_state:
+    st.session_state.patient_id_input = "fa064acf-b7f1-4279-83d3-7a94686da7ba"
 
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -486,7 +488,7 @@ with st.sidebar:
     else:
         patient_id = st.text_input(
             "Patient ID (FHIR UUID)",
-            value="fa064acf-b7f1-4279-83d3-7a94686da7ba",
+            key="patient_id_input",
             placeholder="Enter FHIR patient UUID…",
         )
 
@@ -735,7 +737,15 @@ with _tab_query:
         placeholder="e.g. patients with heart failure on ACE inhibitors who have elevated creatinine",
         key="nl_query_input",
     )
-    search_btn = st.button("🔍 Search", type="primary", key="nl_search_btn")
+    col_search, col_mode = st.columns([3, 1])
+    search_btn = col_search.button("🔍 Search", type="primary", key="nl_search_btn", use_container_width=True)
+    search_mode = col_mode.selectbox(
+        "Mode",
+        options=["auto", "vector", "hybrid"],
+        index=0,
+        key="nl_search_mode",
+        help="auto: SQL → vector → text fallback; vector: pure semantic; hybrid: SQL candidates re-ranked by cosine similarity",
+    )
 
     # Example queries
     with st.expander("Example queries", expanded=False):
@@ -757,7 +767,10 @@ with _tab_query:
 
     if search_btn and effective_query.strip():
         with st.spinner("Searching patient cohort…"):
-            result = _mcp_call("nl_query_patients", {"question": effective_query.strip()})
+            result = _mcp_call("nl_query_patients", {
+                "question": effective_query.strip(),
+                "search_mode": search_mode,
+            })
         st.session_state.query_result = result
 
     if st.session_state.query_result:
@@ -771,6 +784,7 @@ with _tab_query:
             mode_label = {
                 "structured": "✅ SQL",
                 "vector": "🧠 Semantic",
+                "hybrid": "🔀 Hybrid",
                 "text_fallback": "🔤 Text search",
             }.get(mode, mode)
             patients = result.get("patients", [])
@@ -819,11 +833,26 @@ with _tab_query:
                         "Gender": (p.get("gender") or "").capitalize(),
                         "Patient ID": p.get("id", ""),
                     })
-                st.dataframe(rows, use_container_width=True, hide_index=True)
 
-                st.caption(
-                    "Click a Patient ID to use it in the **Clinical Review** tab for full AI analysis."
+                selection = st.dataframe(
+                    rows,
+                    use_container_width=True,
+                    hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    key="patient_table",
                 )
+
+                selected_rows = (selection.selection or {}).get("rows", [])
+                if selected_rows:
+                    selected_pid = rows[selected_rows[0]]["Patient ID"]
+                    st.session_state.patient_id_input = selected_pid
+                    st.success(
+                        f"Patient **{rows[selected_rows[0]]['Name']}** selected. "
+                        f"Switch to the **🏥 Clinical Review** tab and click **▶ Run Analysis**."
+                    )
+                else:
+                    st.caption("Select a row to pre-fill the Patient ID in the Clinical Review tab.")
             else:
                 st.info("No patients found. Try broadening your query or run the indexer first.")
 
