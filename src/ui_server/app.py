@@ -460,7 +460,7 @@ if "patient_id_input" not in st.session_state:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-_tab_review, _tab_query = st.tabs(["🏥 Clinical Review", "🔍 Find Patients"])
+_tab_review, _tab_query, _tab_population = st.tabs(["🏥 Clinical Review", "🔍 Find Patients", "📊 Population Intelligence"])
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -862,3 +862,129 @@ with _tab_query:
             "The patient cohort is indexed from the SMART Health IT FHIR sandbox — "
             "run `python -m src.ddm.indexer` to populate it."
         )
+
+
+# ── Population Intelligence tab ───────────────────────────────────────────────
+
+with _tab_population:
+    st.markdown("### 📊 Population Intelligence")
+    st.caption(
+        "Aggregate view of the indexed patient cohort — condition prevalence, "
+        "medication distribution, and comorbidity clusters. "
+        "Supports staffing planning, cost allocation, and care pathway analysis."
+    )
+
+    if "pop_stats" not in st.session_state:
+        st.session_state.pop_stats = None
+
+    col_load, col_n = st.columns([3, 1])
+    load_btn = col_load.button("📊 Load Population Stats", type="primary", use_container_width=True)
+    top_n = col_n.number_input("Top N", min_value=5, max_value=50, value=15, step=5)
+
+    if load_btn:
+        with st.spinner("Querying patient cohort…"):
+            stats = _mcp_call("get_population_stats", {"top_n": int(top_n)})
+        st.session_state.pop_stats = stats
+
+    if st.session_state.pop_stats:
+        stats = st.session_state.pop_stats
+
+        if "error" in stats:
+            st.error(f"Failed to load stats: {stats['error']}")
+        else:
+            total = stats.get("total_patients", 0)
+            st.metric("Total Indexed Patients", total)
+            st.divider()
+
+            col_cond, col_med = st.columns(2)
+
+            # ── Condition distribution ────────────────────────────────────────
+            with col_cond:
+                st.markdown("#### Condition Prevalence")
+                cond_data = stats.get("condition_distribution", [])
+                if cond_data:
+                    import pandas as pd
+                    df_cond = pd.DataFrame(cond_data).set_index("condition")
+                    df_cond.columns = ["Patients"]
+                    st.bar_chart(df_cond, height=420)
+                else:
+                    st.info("No condition data available.")
+
+            # ── Medication distribution ───────────────────────────────────────
+            with col_med:
+                st.markdown("#### Medication Distribution")
+                med_data = stats.get("medication_distribution", [])
+                if med_data:
+                    import pandas as pd
+                    df_med = pd.DataFrame(med_data).set_index("medication")
+                    df_med.columns = ["Patients"]
+                    st.bar_chart(df_med, height=420)
+                else:
+                    st.info("No medication data available.")
+
+            # ── Comorbidity clusters ──────────────────────────────────────────
+            st.divider()
+            st.markdown("#### Comorbidity Clusters")
+            st.caption("Condition pairs that co-occur most frequently — high co-occurrence drives disproportionate care cost.")
+            comorbidity = stats.get("comorbidity_pairs", [])
+            if comorbidity:
+                import pandas as pd
+                df_co = pd.DataFrame(comorbidity)
+                df_co.columns = ["Condition A", "Condition B", "Patients"]
+                df_co = df_co.sort_values("Patients", ascending=False)
+                st.dataframe(df_co, use_container_width=True, hide_index=True)
+            else:
+                st.info("No comorbidity data available.")
+
+            # ── NL cohort query ───────────────────────────────────────────────
+            st.divider()
+            st.markdown("#### Cohort Query")
+            st.caption("Ask a population-level question. Uses the same NL query engine as Find Patients.")
+
+            pop_query = st.text_input(
+                "Population question",
+                placeholder="e.g. how many patients have both diabetes and heart failure?",
+                key="pop_query_input",
+            )
+            pop_search_btn = st.button("🔍 Query Cohort", key="pop_search_btn")
+
+            if pop_search_btn and pop_query.strip():
+                with st.spinner("Querying cohort…"):
+                    result = _mcp_call("nl_query_patients", {
+                        "question": pop_query.strip(),
+                        "search_mode": "auto",
+                    })
+                if "error" in result:
+                    st.error(f"Query failed: {result['error']}")
+                else:
+                    count = result.get("count", 0)
+                    mode = result.get("mode", "")
+                    mode_label = {
+                        "structured": "SQL",
+                        "vector": "Semantic",
+                        "hybrid": "Hybrid",
+                        "text_fallback": "Text search",
+                    }.get(mode, mode)
+                    st.metric(f"Patients matching query ({mode_label})", count)
+                    patients = result.get("patients", [])
+                    if patients:
+                        rows = []
+                        for p in patients:
+                            birth = p.get("birth_date", "")
+                            age = ""
+                            if birth:
+                                try:
+                                    from datetime import date
+                                    b = date.fromisoformat(str(birth)[:10])
+                                    age = str((date.today() - b).days // 365)
+                                except Exception:
+                                    pass
+                            rows.append({
+                                "Name": f"{p.get('given_name', '')} {p.get('family_name', '')}".strip(),
+                                "Age": age,
+                                "Gender": (p.get("gender") or "").capitalize(),
+                                "Patient ID": p.get("id", ""),
+                            })
+                        st.dataframe(rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("Click **Load Population Stats** to see condition prevalence, medication distribution, and comorbidity clusters across all indexed patients.")

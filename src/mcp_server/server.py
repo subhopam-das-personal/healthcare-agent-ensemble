@@ -503,6 +503,91 @@ async def nl_query_patients(
 
 
 @mcp.tool(meta=_UI_META)
+async def get_population_stats(
+    top_n: int = 15,
+    ctx: Context = None,
+) -> str:
+    """Return aggregate statistics across the indexed patient cohort.
+
+    Queries the local DDM database to produce:
+      - condition_distribution: top-N conditions by unique patient count
+      - medication_distribution: top-N drug classes by unique patient count
+      - comorbidity_pairs: top co-occurring condition pairs (patient-level)
+      - total_patients: total patients indexed
+
+    Args:
+        top_n: Number of top items to return per category (default 15)
+    """
+    logger.info(f"[get_population_stats] top_n={top_n}")
+    try:
+        from sqlalchemy import text as sa_text
+        from ddm.db import get_session_factory
+
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            # Total patients
+            r = await session.execute(sa_text("SELECT COUNT(*) FROM patients"))
+            total_patients = r.scalar() or 0
+
+            # Condition distribution
+            r = await session.execute(sa_text("""
+                SELECT display, COUNT(DISTINCT patient_id) AS patient_count
+                FROM patient_conditions
+                WHERE display IS NOT NULL AND display != ''
+                GROUP BY display
+                ORDER BY patient_count DESC
+                LIMIT :n
+            """), {"n": top_n})
+            condition_distribution = [
+                {"condition": row[0], "patient_count": row[1]}
+                for row in r.fetchall()
+            ]
+
+            # Medication class distribution
+            r = await session.execute(sa_text("""
+                SELECT
+                    COALESCE(NULLIF(drug_class, ''), display) AS label,
+                    COUNT(DISTINCT patient_id) AS patient_count
+                FROM patient_medications
+                WHERE display IS NOT NULL AND display != ''
+                GROUP BY label
+                ORDER BY patient_count DESC
+                LIMIT :n
+            """), {"n": top_n})
+            medication_distribution = [
+                {"medication": row[0], "patient_count": row[1]}
+                for row in r.fetchall()
+            ]
+
+            # Comorbidity pairs — top co-occurring condition pairs
+            r = await session.execute(sa_text("""
+                SELECT a.display AS condition_a, b.display AS condition_b,
+                       COUNT(DISTINCT a.patient_id) AS patient_count
+                FROM patient_conditions a
+                JOIN patient_conditions b
+                  ON a.patient_id = b.patient_id AND a.display < b.display
+                GROUP BY a.display, b.display
+                ORDER BY patient_count DESC
+                LIMIT :n
+            """), {"n": top_n})
+            comorbidity_pairs = [
+                {"condition_a": row[0], "condition_b": row[1], "patient_count": row[2]}
+                for row in r.fetchall()
+            ]
+
+        return json.dumps({
+            "total_patients": total_patients,
+            "condition_distribution": condition_distribution,
+            "medication_distribution": medication_distribution,
+            "comorbidity_pairs": comorbidity_pairs,
+        }, indent=2)
+
+    except Exception as e:
+        logger.error(f"[get_population_stats] failed: {e}")
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool(meta=_UI_META)
 async def index_fhir_source(
     source_id: int,
     max_patients: int = 0,
