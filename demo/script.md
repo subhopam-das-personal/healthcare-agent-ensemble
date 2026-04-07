@@ -6,34 +6,17 @@
 
 ## PRE-FLIGHT — Do this 10 minutes before the call
 
-Open 3 terminals and run each service:
-
-```bash
-# Terminal 1 — MCP Server
-cd ~/Documents/Programming/hackathons/healthcare-agent-ensemble
-python -m src.mcp_server.server
-```
-
-```bash
-# Terminal 2 — A2A Agent
-cd ~/Documents/Programming/hackathons/healthcare-agent-ensemble
-python -m src.a2a_agent.server
-```
-
-```bash
-# Terminal 3 — UI
-cd ~/Documents/Programming/hackathons/healthcare-agent-ensemble
-streamlit run src/ui_server/app.py
-```
+**No local setup needed. Everything runs on Railway.**
 
 Open these 3 browser tabs and leave them ready:
 
 | Tab | URL | What it shows |
 |-----|-----|---------------|
-| **Tab A — UI** | http://localhost:8501 | The main demo screen |
-| **Tab B — Agent Card** | http://localhost:9999/.well-known/agent.json | A2A open protocol discovery |
-| **Tab C — MCP Tools** | http://localhost:8000/mcp | MCP server / composable tools |
+| **Tab A — UI** | https://ui-server-production.up.railway.app | The main demo screen |
+| **Tab B — Agent Card** | https://a2a-agent-production-03a5.up.railway.app/.well-known/agent.json | A2A open protocol discovery |
+| **Tab C — MCP Tools** | https://healthcare-agent-ensemble-production.up.railway.app/mcp | MCP server / composable tools |
 
+**Load Tab A first and confirm the UI is up before the call starts.**
 **Start on Tab A. Do not touch anything until you begin speaking.**
 
 ---
@@ -57,13 +40,13 @@ Open these 3 browser tabs and leave them ready:
 
 ## [0:45 – 1:15] ARCHITECTURE — Open protocols (Tab B → Tab C)
 
-**Action: Switch to Tab B** → http://localhost:9999/.well-known/agent.json
+**Action: Switch to Tab B** → https://a2a-agent-production-03a5.up.railway.app/.well-known/agent.json
 
 > "This is the A2A agent card — the open protocol Google and the industry are standardizing
 > on for agent interoperability. PPD's Preclarus suite doesn't expose an interface like this.
 > Any orchestrating AI can discover and call this agent."
 
-**Action: Switch to Tab C** → http://localhost:8000/mcp
+**Action: Switch to Tab C** → https://healthcare-agent-ensemble-production.up.railway.app/mcp
 
 > "And this is the MCP server — four composable clinical tools: FHIR R4 patient retrieval,
 > differential diagnosis, drug interaction analysis, care gap identification.
@@ -77,7 +60,7 @@ Open these 3 browser tabs and leave them ready:
 
 ## [1:15 – 1:45] LOAD PATIENT — Demo Mode (Tab A)
 
-**Action: Switch to Tab A** → http://localhost:8501
+**Action: Switch to Tab A** → https://ui-server-production.up.railway.app
 
 > "The demo patient is Margaret Alvarez, 55-year-old female.
 > Three active conditions: major depressive disorder, chronic pain, post-operative infection.
@@ -199,11 +182,11 @@ Synthetic patient — constructed from published FDA adverse event patterns.
 
 | What broke | What to say | What to do |
 |---|---|---|
-| A2A agent not responding | "This is local dev — not production hardened. The agent card at port 9999 shows how a production deployment exposes the same interface." | Refresh UI, click ▶ Run Analysis again |
-| Clinical trials section empty | "ClinicalTrials.gov API is live — occasionally rate-limited. The matching logic queries the v2 REST API by condition, age, and gender — `trials_client.py`." | Move on, don't dwell |
-| Analysis takes >2 min | Say nothing extra — narrate steps appearing. "You're watching a multi-agent workflow. DDx and drug safety agents running in parallel, synthesis integrating both." | Keep narrating |
+| A2A agent not responding | "The Railway service is restarting — this happens occasionally on the free tier. The architecture is what matters." | Hard-refresh Tab A, click ▶ Run Analysis again |
+| Clinical trials section empty | "ClinicalTrials.gov API is live — occasionally rate-limited. The matching logic queries the v2 REST API by condition, age, and gender." | Move on, don't dwell |
+| Analysis takes >2 min | Narrate steps appearing. "You're watching a multi-agent workflow — DDx and drug safety agents running in parallel, synthesis integrating both." | Keep narrating |
 | Demo Mode doesn't load patient | Type `demo-serotonin-patient-001` manually in Patient ID field. Run without Demo Mode checkbox. | Silent recovery |
-| Tabs not loading | "Let me pull up the JSON directly." Open `demo/patient_serotonin_syndrome.json` and show the FHIR bundle structure. | Pivot to architecture story |
+| Railway UI is down | Switch to Tab B (agent card JSON) and Tab C (MCP endpoint) — explain the architecture from those. | Pivot to architecture story |
 
 ---
 
