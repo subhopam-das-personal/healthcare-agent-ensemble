@@ -19,6 +19,8 @@ from a2a.types import (
     AgentCard, AgentSkill, AgentCapabilities, AgentProvider,
     Message, MessageSendParams, Task, TaskArtifactUpdateEvent, TaskStatusUpdateEvent,
 )
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from a2a_agent.executor import CDSAgentExecutor
@@ -116,6 +118,14 @@ class RobustRequestHandler(DefaultRequestHandler):
             yield event
 
 
+class _BlockDeprecatedAgentCard(BaseHTTPMiddleware):
+    """Return 404 for the deprecated /.well-known/agent.json endpoint."""
+    async def dispatch(self, request, call_next):
+        if request.url.path == "/.well-known/agent.json":
+            return Response(status_code=404)
+        return await call_next(request)
+
+
 def create_app():
     handler = RobustRequestHandler(
         agent_executor=CDSAgentExecutor(),
@@ -125,7 +135,9 @@ def create_app():
         agent_card=agent_card,
         http_handler=handler,
     )
-    return a2a_app.build()
+    app = a2a_app.build()
+    app.add_middleware(_BlockDeprecatedAgentCard)
+    return app
 
 
 if __name__ == "__main__":
