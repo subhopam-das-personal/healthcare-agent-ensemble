@@ -3,8 +3,9 @@
 import os
 import json
 import logging
-from collections.abc import AsyncGenerator
-from zai import ZaiClient, ZaiAsyncClient
+from typing import Any
+
+from zhipuai import ZhipuAI
 
 logger = logging.getLogger(__name__)
 
@@ -12,22 +13,13 @@ ZAI_MODEL = "glm-4.7"
 ZAI_TIMEOUT = 60.0
 
 
-def get_client() -> ZaiClient:
-    """Get a synchronous ZaiClient instance."""
+def get_client() -> ZhipuAI:
+    """Get a ZhipuAI (zai-sdk) client instance."""
     api_key = os.environ.get("ZAI_API_KEY")
     if not api_key:
         raise ValueError("ZAI_API_KEY environment variable is required")
-    base_url = os.environ.get("ZAI_BASE_URL", "https://api.z.ai/api/paas/v4/")
-    return ZaiClient(api_key=api_key, base_url=base_url, timeout=ZAI_TIMEOUT)
-
-
-def get_async_client() -> ZaiAsyncClient:
-    """Get an asynchronous ZaiAsyncClient instance."""
-    api_key = os.environ.get("ZAI_API_KEY")
-    if not api_key:
-        raise ValueError("ZAI_API_KEY environment variable is required")
-    base_url = os.environ.get("ZAI_BASE_URL", "https://api.z.ai/api/paas/v4/")
-    return ZaiAsyncClient(api_key=api_key, base_url=base_url, timeout=ZAI_TIMEOUT)
+    base_url = os.environ.get("ZAI_BASE_URL", "https://api.z.ai/api/paas/v4")
+    return ZhipuAI(api_key=api_key, base_url=base_url, timeout=ZAI_TIMEOUT)
 
 
 DDX_SYSTEM_PROMPT = """You are a clinical decision support assistant specializing in differential diagnosis.
@@ -244,17 +236,17 @@ Drug Interaction Analysis:
         return {"error": f"AI reasoning failed: {str(e)}"}
 
 
-# ── Async streaming generators ──────────────────────────────────────────────
+# ── Streaming generators ──────────────────────────────────────────────────────
 
 
-async def stream_ddx_tokens(
+def stream_ddx_tokens(
     patient_data: dict, symptoms: str = ""
-) -> AsyncGenerator[str, None]:
-    """Async generator yielding differential diagnosis text tokens as they arrive."""
+):
+    """Generator yielding differential diagnosis text tokens as they arrive."""
     user_content = f"Patient Data:\n{json.dumps(patient_data, indent=2)}"
     if symptoms:
         user_content += f"\n\nAdditional Symptoms Reported:\n{symptoms}"
-    client = get_async_client()
+    client = get_client()
     stream = client.chat.completions.create(
         model=ZAI_MODEL,
         max_tokens=4096,
@@ -264,17 +256,17 @@ async def stream_ddx_tokens(
         ],
         stream=True,
     )
-    async for chunk in stream:
+    for chunk in stream:
         if chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content
 
 
-async def stream_drug_interaction_tokens(
+def stream_drug_interaction_tokens(
     patient_data: dict,
     rxnav_interactions: dict | None = None,
     proposed_medications: list[str] | None = None,
-) -> AsyncGenerator[str, None]:
-    """Async generator yielding drug interaction analysis tokens as they arrive."""
+):
+    """Generator yielding drug interaction analysis tokens as they arrive."""
     user_content = f"Patient Data:\n{json.dumps(patient_data, indent=2)}"
     if rxnav_interactions:
         user_content += f"\n\nRxNav Database Interactions:\n{json.dumps(rxnav_interactions, indent=2)}"
@@ -282,7 +274,7 @@ async def stream_drug_interaction_tokens(
         user_content += "\n\nNo database interactions found. Please analyze based on pharmacological knowledge (label as AI-generated)."
     if proposed_medications:
         user_content += f"\n\nProposed New Medications to Check:\n{json.dumps(proposed_medications)}"
-    client = get_async_client()
+    client = get_client()
     stream = client.chat.completions.create(
         model=ZAI_MODEL,
         max_tokens=4096,
@@ -292,18 +284,18 @@ async def stream_drug_interaction_tokens(
         ],
         stream=True,
     )
-    async for chunk in stream:
+    for chunk in stream:
         if chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content
 
 
-async def stream_synthesis_tokens(
+def stream_synthesis_tokens(
     patient_summary: dict,
     ddx_results: dict,
     interaction_results: dict,
     care_gaps: dict | None = None,
-) -> AsyncGenerator[str, None]:
-    """Async generator yielding integrated clinical assessment tokens as they arrive."""
+):
+    """Generator yielding integrated clinical assessment tokens as they arrive."""
     user_content = f"""Patient Summary:
 {json.dumps(patient_summary, indent=2)}
 
@@ -314,7 +306,7 @@ Drug Interaction Analysis:
 {json.dumps(interaction_results, indent=2)}"""
     if care_gaps:
         user_content += f"\n\nCare Gap Analysis:\n{json.dumps(care_gaps, indent=2)}"
-    client = get_async_client()
+    client = get_client()
     stream = client.chat.completions.create(
         model=ZAI_MODEL,
         max_tokens=4096,
@@ -324,6 +316,6 @@ Drug Interaction Analysis:
         ],
         stream=True,
     )
-    async for chunk in stream:
+    for chunk in stream:
         if chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content
