@@ -16,14 +16,16 @@ def get_client() -> Anthropic:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY environment variable is required")
-    return Anthropic(api_key=api_key, timeout=CLAUDE_TIMEOUT)
+    base_url = os.environ.get("ANTHROPIC_BASE_URL")
+    return Anthropic(api_key=api_key, base_url=base_url, timeout=CLAUDE_TIMEOUT)
 
 
 def get_async_client() -> AsyncAnthropic:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY environment variable is required")
-    return AsyncAnthropic(api_key=api_key, timeout=CLAUDE_TIMEOUT)
+    base_url = os.environ.get("ANTHROPIC_BASE_URL")
+    return AsyncAnthropic(api_key=api_key, base_url=base_url, timeout=CLAUDE_TIMEOUT)
 
 
 DDX_SYSTEM_PROMPT = """You are a clinical decision support assistant specializing in differential diagnosis.
