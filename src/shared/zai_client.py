@@ -1,5 +1,6 @@
 """Z.AI API client for clinical reasoning."""
 
+import asyncio
 import os
 import json
 import logging
@@ -237,36 +238,40 @@ Drug Interaction Analysis:
 
 
 # ── Streaming generators ──────────────────────────────────────────────────────
+# These are async generators so the A2A executor can use `async for`.
+# ZhipuAI is synchronous, so we run each stream in a thread pool via
+# asyncio.to_thread and collect all tokens before yielding them.
 
 
-def stream_ddx_tokens(
-    patient_data: dict, symptoms: str = ""
-):
-    """Generator yielding differential diagnosis text tokens as they arrive."""
+async def stream_ddx_tokens(patient_data: dict, symptoms: str = ""):
+    """Async generator yielding differential diagnosis text tokens."""
     user_content = f"Patient Data:\n{json.dumps(patient_data, indent=2)}"
     if symptoms:
         user_content += f"\n\nAdditional Symptoms Reported:\n{symptoms}"
-    client = get_client()
-    stream = client.chat.completions.create(
-        model=ZAI_MODEL,
-        max_tokens=4096,
-        messages=[
-            {"role": "system", "content": DDX_SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
-        stream=True,
-    )
-    for chunk in stream:
-        if chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+
+    def _collect() -> list[str]:
+        client = get_client()
+        stream = client.chat.completions.create(
+            model=ZAI_MODEL,
+            max_tokens=4096,
+            messages=[
+                {"role": "system", "content": DDX_SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            stream=True,
+        )
+        return [c.choices[0].delta.content for c in stream if c.choices[0].delta.content]
+
+    for token in await asyncio.to_thread(_collect):
+        yield token
 
 
-def stream_drug_interaction_tokens(
+async def stream_drug_interaction_tokens(
     patient_data: dict,
     rxnav_interactions: dict | None = None,
     proposed_medications: list[str] | None = None,
 ):
-    """Generator yielding drug interaction analysis tokens as they arrive."""
+    """Async generator yielding drug interaction analysis tokens."""
     user_content = f"Patient Data:\n{json.dumps(patient_data, indent=2)}"
     if rxnav_interactions:
         user_content += f"\n\nRxNav Database Interactions:\n{json.dumps(rxnav_interactions, indent=2)}"
@@ -274,28 +279,31 @@ def stream_drug_interaction_tokens(
         user_content += "\n\nNo database interactions found. Please analyze based on pharmacological knowledge (label as AI-generated)."
     if proposed_medications:
         user_content += f"\n\nProposed New Medications to Check:\n{json.dumps(proposed_medications)}"
-    client = get_client()
-    stream = client.chat.completions.create(
-        model=ZAI_MODEL,
-        max_tokens=4096,
-        messages=[
-            {"role": "system", "content": DRUG_INTERACTION_SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
-        stream=True,
-    )
-    for chunk in stream:
-        if chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+
+    def _collect() -> list[str]:
+        client = get_client()
+        stream = client.chat.completions.create(
+            model=ZAI_MODEL,
+            max_tokens=4096,
+            messages=[
+                {"role": "system", "content": DRUG_INTERACTION_SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            stream=True,
+        )
+        return [c.choices[0].delta.content for c in stream if c.choices[0].delta.content]
+
+    for token in await asyncio.to_thread(_collect):
+        yield token
 
 
-def stream_synthesis_tokens(
+async def stream_synthesis_tokens(
     patient_summary: dict,
     ddx_results: dict,
     interaction_results: dict,
     care_gaps: dict | None = None,
 ):
-    """Generator yielding integrated clinical assessment tokens as they arrive."""
+    """Async generator yielding integrated clinical assessment tokens."""
     user_content = f"""Patient Summary:
 {json.dumps(patient_summary, indent=2)}
 
@@ -306,16 +314,19 @@ Drug Interaction Analysis:
 {json.dumps(interaction_results, indent=2)}"""
     if care_gaps:
         user_content += f"\n\nCare Gap Analysis:\n{json.dumps(care_gaps, indent=2)}"
-    client = get_client()
-    stream = client.chat.completions.create(
-        model=ZAI_MODEL,
-        max_tokens=4096,
-        messages=[
-            {"role": "system", "content": SYNTHESIS_SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
-        stream=True,
-    )
-    for chunk in stream:
-        if chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+
+    def _collect() -> list[str]:
+        client = get_client()
+        stream = client.chat.completions.create(
+            model=ZAI_MODEL,
+            max_tokens=4096,
+            messages=[
+                {"role": "system", "content": SYNTHESIS_SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            stream=True,
+        )
+        return [c.choices[0].delta.content for c in stream if c.choices[0].delta.content]
+
+    for token in await asyncio.to_thread(_collect):
+        yield token

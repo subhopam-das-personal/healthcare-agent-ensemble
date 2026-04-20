@@ -1,5 +1,5 @@
 mcp[cli]>=1.26.0
-zai-sdk>=0.2.2
+zhipuai>=2.1.0
 httpx>=0.27.0
 httpx-sse>=0.4.0
 uvicorn>=0.30.0

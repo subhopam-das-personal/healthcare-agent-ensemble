@@ -295,40 +295,51 @@ class TestRunSynthesis:
 
 
 # ── stream_ddx_tokens ─────────────────────────────────────────────────────────
+# Streaming functions are now async generators (ZhipuAI is sync, wrapped in
+# asyncio.to_thread). Tests run the async generator to completion with a helper.
+
+
+async def _collect_async(agen) -> list[str]:
+    """Drain an async generator into a list."""
+    return [token async for token in agen]
 
 
 class TestStreamDdxTokens:
-    def test_yields_all_non_empty_tokens(self):
+    @pytest.mark.asyncio
+    async def test_yields_all_non_empty_tokens(self):
         tokens = ["{\n", '"differentials":', " []}"]
         client = _make_streaming_client(tokens)
         with patch("shared.zai_client.get_client", return_value=client):
-            result = list(stream_ddx_tokens(SAMPLE_PATIENT))
+            result = await _collect_async(stream_ddx_tokens(SAMPLE_PATIENT))
         assert result == tokens
 
-    def test_skips_empty_delta_content(self):
-        # Empty string is falsy; the streaming loop should skip it
+    @pytest.mark.asyncio
+    async def test_skips_empty_delta_content(self):
         tokens = ["hello", "", "world"]
         client = _make_streaming_client(tokens)
         with patch("shared.zai_client.get_client", return_value=client):
-            result = list(stream_ddx_tokens(SAMPLE_PATIENT))
+            result = await _collect_async(stream_ddx_tokens(SAMPLE_PATIENT))
         assert result == ["hello", "world"]
 
-    def test_called_with_stream_true(self):
+    @pytest.mark.asyncio
+    async def test_called_with_stream_true(self):
         client = _make_streaming_client(["{}"])
         with patch("shared.zai_client.get_client", return_value=client):
-            list(stream_ddx_tokens(SAMPLE_PATIENT))
+            await _collect_async(stream_ddx_tokens(SAMPLE_PATIENT))
         assert client.chat.completions.create.call_args.kwargs["stream"] is True
 
-    def test_uses_correct_model(self):
+    @pytest.mark.asyncio
+    async def test_uses_correct_model(self):
         client = _make_streaming_client(["{}"])
         with patch("shared.zai_client.get_client", return_value=client):
-            list(stream_ddx_tokens(SAMPLE_PATIENT))
+            await _collect_async(stream_ddx_tokens(SAMPLE_PATIENT))
         assert client.chat.completions.create.call_args.kwargs["model"] == ZAI_MODEL
 
-    def test_symptoms_included_in_stream_prompt(self):
+    @pytest.mark.asyncio
+    async def test_symptoms_included_in_stream_prompt(self):
         client = _make_streaming_client(["{}"])
         with patch("shared.zai_client.get_client", return_value=client):
-            list(stream_ddx_tokens(SAMPLE_PATIENT, symptoms="fatigue"))
+            await _collect_async(stream_ddx_tokens(SAMPLE_PATIENT, symptoms="fatigue"))
         assert "fatigue" in _user_message(client)
 
 
@@ -336,36 +347,41 @@ class TestStreamDdxTokens:
 
 
 class TestStreamDrugInteractionTokens:
-    def test_yields_all_tokens(self):
+    @pytest.mark.asyncio
+    async def test_yields_all_tokens(self):
         tokens = ['{"interactions": []}']
         client = _make_streaming_client(tokens)
         with patch("shared.zai_client.get_client", return_value=client):
-            result = list(stream_drug_interaction_tokens(SAMPLE_PATIENT))
+            result = await _collect_async(stream_drug_interaction_tokens(SAMPLE_PATIENT))
         assert result == tokens
 
-    def test_called_with_stream_true(self):
+    @pytest.mark.asyncio
+    async def test_called_with_stream_true(self):
         client = _make_streaming_client(["{}"])
         with patch("shared.zai_client.get_client", return_value=client):
-            list(stream_drug_interaction_tokens(SAMPLE_PATIENT))
+            await _collect_async(stream_drug_interaction_tokens(SAMPLE_PATIENT))
         assert client.chat.completions.create.call_args.kwargs["stream"] is True
 
-    def test_rxnav_data_included_in_stream_prompt(self):
+    @pytest.mark.asyncio
+    async def test_rxnav_data_included_in_stream_prompt(self):
         client = _make_streaming_client(["{}"])
         rxnav = {"source": "rxnav", "interactions": []}
         with patch("shared.zai_client.get_client", return_value=client):
-            list(stream_drug_interaction_tokens(SAMPLE_PATIENT, rxnav_interactions=rxnav))
+            await _collect_async(stream_drug_interaction_tokens(SAMPLE_PATIENT, rxnav_interactions=rxnav))
         assert "RxNav" in _user_message(client)
 
-    def test_proposed_medications_in_stream_prompt(self):
+    @pytest.mark.asyncio
+    async def test_proposed_medications_in_stream_prompt(self):
         client = _make_streaming_client(["{}"])
         with patch("shared.zai_client.get_client", return_value=client):
-            list(stream_drug_interaction_tokens(SAMPLE_PATIENT, proposed_medications=["aspirin"]))
+            await _collect_async(stream_drug_interaction_tokens(SAMPLE_PATIENT, proposed_medications=["aspirin"]))
         assert "aspirin" in _user_message(client)
 
-    def test_uses_correct_model(self):
+    @pytest.mark.asyncio
+    async def test_uses_correct_model(self):
         client = _make_streaming_client(["{}"])
         with patch("shared.zai_client.get_client", return_value=client):
-            list(stream_drug_interaction_tokens(SAMPLE_PATIENT))
+            await _collect_async(stream_drug_interaction_tokens(SAMPLE_PATIENT))
         assert client.chat.completions.create.call_args.kwargs["model"] == ZAI_MODEL
 
 
@@ -373,34 +389,39 @@ class TestStreamDrugInteractionTokens:
 
 
 class TestStreamSynthesisTokens:
-    def test_yields_all_tokens(self):
+    @pytest.mark.asyncio
+    async def test_yields_all_tokens(self):
         tokens = ['{"assessment_summary": "ok"}']
         client = _make_streaming_client(tokens)
         with patch("shared.zai_client.get_client", return_value=client):
-            result = list(stream_synthesis_tokens(SAMPLE_PATIENT, SAMPLE_DDX, SAMPLE_INTERACTION))
+            result = await _collect_async(stream_synthesis_tokens(SAMPLE_PATIENT, SAMPLE_DDX, SAMPLE_INTERACTION))
         assert result == tokens
 
-    def test_called_with_stream_true(self):
+    @pytest.mark.asyncio
+    async def test_called_with_stream_true(self):
         client = _make_streaming_client(["{}"])
         with patch("shared.zai_client.get_client", return_value=client):
-            list(stream_synthesis_tokens(SAMPLE_PATIENT, SAMPLE_DDX, SAMPLE_INTERACTION))
+            await _collect_async(stream_synthesis_tokens(SAMPLE_PATIENT, SAMPLE_DDX, SAMPLE_INTERACTION))
         assert client.chat.completions.create.call_args.kwargs["stream"] is True
 
-    def test_care_gaps_in_stream_prompt(self):
+    @pytest.mark.asyncio
+    async def test_care_gaps_in_stream_prompt(self):
         client = _make_streaming_client(["{}"])
         care_gaps = {"gaps": ["No statin"]}
         with patch("shared.zai_client.get_client", return_value=client):
-            list(stream_synthesis_tokens(SAMPLE_PATIENT, SAMPLE_DDX, SAMPLE_INTERACTION, care_gaps=care_gaps))
+            await _collect_async(stream_synthesis_tokens(SAMPLE_PATIENT, SAMPLE_DDX, SAMPLE_INTERACTION, care_gaps=care_gaps))
         assert "No statin" in _user_message(client)
 
-    def test_no_care_gaps_section_when_none(self):
+    @pytest.mark.asyncio
+    async def test_no_care_gaps_section_when_none(self):
         client = _make_streaming_client(["{}"])
         with patch("shared.zai_client.get_client", return_value=client):
-            list(stream_synthesis_tokens(SAMPLE_PATIENT, SAMPLE_DDX, SAMPLE_INTERACTION, care_gaps=None))
+            await _collect_async(stream_synthesis_tokens(SAMPLE_PATIENT, SAMPLE_DDX, SAMPLE_INTERACTION, care_gaps=None))
         assert "Care Gap" not in _user_message(client)
 
-    def test_uses_correct_model(self):
+    @pytest.mark.asyncio
+    async def test_uses_correct_model(self):
         client = _make_streaming_client(["{}"])
         with patch("shared.zai_client.get_client", return_value=client):
-            list(stream_synthesis_tokens(SAMPLE_PATIENT, SAMPLE_DDX, SAMPLE_INTERACTION))
+            await _collect_async(stream_synthesis_tokens(SAMPLE_PATIENT, SAMPLE_DDX, SAMPLE_INTERACTION))
         assert client.chat.completions.create.call_args.kwargs["model"] == ZAI_MODEL
