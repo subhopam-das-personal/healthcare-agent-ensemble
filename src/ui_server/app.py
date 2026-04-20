@@ -688,7 +688,7 @@ with _tab_review:
 
             with st.chat_message("assistant", avatar="🤖"):
                 try:
-                    from shared.claude_client import CLAUDE_MODEL, get_client
+                    from shared.zai_client import ZAI_MODEL, get_client
                     client = get_client()
                     prior = base64.b64decode(st.session_state.analysis_context).decode("utf-8") \
                         if st.session_state.analysis_context else ""
@@ -700,17 +700,22 @@ with _tab_review:
                     user_msg = f"Patient ID: {patient_id}\n\nPrior analysis:\n{prior[:4000]}\n\nQuestion: {prompt}"
 
                     response_text = ""
-                    with client.messages.stream(
-                        model=CLAUDE_MODEL,
+                    stream = client.chat.completions.create(
+                        model=ZAI_MODEL,
                         max_tokens=1024,
-                        system=system,
-                        messages=[{"role": "user", "content": user_msg}],
-                    ) as stream:
-                        response_placeholder = st.empty()
-                        for chunk in stream.text_stream:
-                            response_text += chunk
+                        messages=[
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user_msg},
+                        ],
+                        stream=True,
+                    )
+                    response_placeholder = st.empty()
+                    for chunk in stream:
+                        if chunk.choices[0].delta.content:
+                            content = chunk.choices[0].delta.content
+                            response_text += content
                             response_placeholder.markdown(response_text + "▌")
-                        response_placeholder.markdown(response_text)
+                    response_placeholder.markdown(response_text)
 
                     st.session_state.messages.append({"role": "assistant", "content": response_text})
                 except Exception as e:

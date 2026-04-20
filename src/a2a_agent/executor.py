@@ -15,7 +15,7 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from shared.fhir_client import get_patient_data, DEFAULT_FHIR_BASE_URL
 from shared.rxnav_client import resolve_medications_to_rxcuis, get_interactions
-from shared.claude_client import (
+from shared.zai_client import (
     stream_ddx_tokens,
     stream_drug_interaction_tokens,
     stream_synthesis_tokens,

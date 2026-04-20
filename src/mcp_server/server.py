@@ -16,7 +16,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 # Add parent to path for shared imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from shared.fhir_client import get_patient_data, DEFAULT_FHIR_BASE_URL
-from shared.claude_client import run_ddx_reasoning, run_drug_interaction_reasoning, run_synthesis
+from shared.zai_client import run_ddx_reasoning, run_drug_interaction_reasoning, run_synthesis
 from shared.rxnav_client import get_interactions, resolve_medications_to_rxcuis
 from shared.trials_client import search_trials_by_conditions, get_trial_details as _get_trial_details
 
