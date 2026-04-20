@@ -55,7 +55,7 @@ async def search_trials_by_conditions(
         )
 
     if gender and gender.lower() in ("male", "female"):
-        params["filter.advanced"] = f"AREA[Gender]({gender.upper()} OR ALL)"
+        params["filter.advanced"] = f"AREA[Sex]({gender.upper()} OR ALL)"
 
     try:
         async with httpx.AsyncClient(timeout=CTGOV_TIMEOUT) as client:
