@@ -1,26 +1,68 @@
-"""Z.AI API client for clinical reasoning."""
+"""Z.AI API client for clinical reasoning — OpenAI-compatible SDK."""
 
-import asyncio
 import os
 import json
 import logging
-from typing import Any
 
-from zhipuai import ZhipuAI
+from openai import AsyncOpenAI, OpenAI
 
 logger = logging.getLogger(__name__)
 
-ZAI_MODEL = "glm-4.7"
+ZAI_MODEL = "glm-5.1"
 ZAI_TIMEOUT = 60.0
+_DEFAULT_BASE_URL = "https://api.z.ai/api/paas/v4/"
 
 
-def get_client() -> ZhipuAI:
-    """Get a ZhipuAI (zai-sdk) client instance."""
-    api_key = os.environ.get("ZAI_API_KEY")
+# ── Client factories ──────────────────────────────────────────────────────────
+
+
+def get_client() -> OpenAI:
+    """Synchronous client for non-streaming calls."""
+    api_key = os.environ.get("ZAI_API_KEY", "")
     if not api_key:
         raise ValueError("ZAI_API_KEY environment variable is required")
-    base_url = os.environ.get("ZAI_BASE_URL", "https://api.z.ai/api/paas/v4")
-    return ZhipuAI(api_key=api_key, base_url=base_url, timeout=ZAI_TIMEOUT)
+    return OpenAI(
+        api_key=api_key,
+        base_url=os.environ.get("ZAI_BASE_URL", _DEFAULT_BASE_URL),
+        timeout=ZAI_TIMEOUT,
+    )
+
+
+def get_async_client() -> AsyncOpenAI:
+    """Async client for streaming calls."""
+    api_key = os.environ.get("ZAI_API_KEY", "")
+    if not api_key:
+        raise ValueError("ZAI_API_KEY environment variable is required")
+    return AsyncOpenAI(
+        api_key=api_key,
+        base_url=os.environ.get("ZAI_BASE_URL", _DEFAULT_BASE_URL),
+        timeout=ZAI_TIMEOUT,
+    )
+
+
+# ── JSON parsing helper ───────────────────────────────────────────────────────
+
+
+def _parse_json_text(text: str) -> dict:
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    if "```json" in text:
+        try:
+            return json.loads(text.split("```json")[1].split("```")[0].strip())
+        except (json.JSONDecodeError, IndexError):
+            pass
+    if "```" in text:
+        try:
+            return json.loads(text.split("```")[1].split("```")[0].strip())
+        except (json.JSONDecodeError, IndexError):
+            pass
+    return {"raw_response": text}
+
+
+# ── System prompts ────────────────────────────────────────────────────────────
 
 
 DDX_SYSTEM_PROMPT = """You are a clinical decision support assistant specializing in differential diagnosis.
@@ -118,12 +160,14 @@ Rules:
 - DISCLAIMER: All outputs require review by a licensed provider."""
 
 
+# ── Public non-streaming API ──────────────────────────────────────────────────
+
+
 def run_ddx_reasoning(patient_data: dict, symptoms: str = "") -> dict:
     """Generate differential diagnosis using Z.AI."""
     user_content = f"Patient Data:\n{json.dumps(patient_data, indent=2)}"
     if symptoms:
         user_content += f"\n\nAdditional Symptoms Reported:\n{symptoms}"
-
     try:
         client = get_client()
         response = client.chat.completions.create(
@@ -134,19 +178,7 @@ def run_ddx_reasoning(patient_data: dict, symptoms: str = "") -> dict:
                 {"role": "user", "content": user_content},
             ],
         )
-        text = response.choices[0].message.content
-        # Try to parse as JSON, fall back to raw text
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            # Extract JSON from markdown code block if present
-            if "```json" in text:
-                json_str = text.split("```json")[1].split("```")[0].strip()
-                return json.loads(json_str)
-            elif "```" in text:
-                json_str = text.split("```")[1].split("```")[0].strip()
-                return json.loads(json_str)
-            return {"raw_response": text}
+        return _parse_json_text(response.choices[0].message.content)
     except Exception as e:
         logger.error(f"Z.AI DDx reasoning failed: {e}")
         return {"error": f"AI reasoning failed: {str(e)}"}
@@ -165,7 +197,6 @@ def run_drug_interaction_reasoning(
         user_content += "\n\nNo database interactions found. Please analyze based on pharmacological knowledge (label as AI-generated)."
     if proposed_medications:
         user_content += f"\n\nProposed New Medications to Check:\n{json.dumps(proposed_medications)}"
-
     try:
         client = get_client()
         response = client.chat.completions.create(
@@ -176,17 +207,7 @@ def run_drug_interaction_reasoning(
                 {"role": "user", "content": user_content},
             ],
         )
-        text = response.choices[0].message.content
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            if "```json" in text:
-                json_str = text.split("```json")[1].split("```")[0].strip()
-                return json.loads(json_str)
-            elif "```" in text:
-                json_str = text.split("```")[1].split("```")[0].strip()
-                return json.loads(json_str)
-            return {"raw_response": text}
+        return _parse_json_text(response.choices[0].message.content)
     except Exception as e:
         logger.error(f"Z.AI drug interaction reasoning failed: {e}")
         return {"error": f"AI reasoning failed: {str(e)}"}
@@ -207,10 +228,8 @@ Differential Diagnosis Analysis:
 
 Drug Interaction Analysis:
 {json.dumps(interaction_results, indent=2)}"""
-
     if care_gaps:
         user_content += f"\n\nCare Gap Analysis:\n{json.dumps(care_gaps, indent=2)}"
-
     try:
         client = get_client()
         response = client.chat.completions.create(
@@ -221,26 +240,15 @@ Drug Interaction Analysis:
                 {"role": "user", "content": user_content},
             ],
         )
-        text = response.choices[0].message.content
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            if "```json" in text:
-                json_str = text.split("```json")[1].split("```")[0].strip()
-                return json.loads(json_str)
-            elif "```" in text:
-                json_str = text.split("```")[1].split("```")[0].strip()
-                return json.loads(json_str)
-            return {"raw_response": text}
+        return _parse_json_text(response.choices[0].message.content)
     except Exception as e:
         logger.error(f"Z.AI synthesis failed: {e}")
         return {"error": f"AI reasoning failed: {str(e)}"}
 
 
-# ── Streaming generators ──────────────────────────────────────────────────────
-# These are async generators so the A2A executor can use `async for`.
-# ZhipuAI is synchronous, so we run each stream in a thread pool via
-# asyncio.to_thread and collect all tokens before yielding them.
+# ── Streaming async generators ────────────────────────────────────────────────
+# AsyncOpenAI.chat.completions.create(stream=True) returns an AsyncStream,
+# so these are native async generators — no thread pool needed.
 
 
 async def stream_ddx_tokens(patient_data: dict, symptoms: str = ""):
@@ -248,22 +256,20 @@ async def stream_ddx_tokens(patient_data: dict, symptoms: str = ""):
     user_content = f"Patient Data:\n{json.dumps(patient_data, indent=2)}"
     if symptoms:
         user_content += f"\n\nAdditional Symptoms Reported:\n{symptoms}"
-
-    def _collect() -> list[str]:
-        client = get_client()
-        stream = client.chat.completions.create(
-            model=ZAI_MODEL,
-            max_tokens=4096,
-            messages=[
-                {"role": "system", "content": DDX_SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            stream=True,
-        )
-        return [c.choices[0].delta.content for c in stream if c.choices[0].delta.content]
-
-    for token in await asyncio.to_thread(_collect):
-        yield token
+    client = get_async_client()
+    stream = await client.chat.completions.create(
+        model=ZAI_MODEL,
+        max_tokens=4096,
+        messages=[
+            {"role": "system", "content": DDX_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        stream=True,
+    )
+    async for chunk in stream:
+        token = chunk.choices[0].delta.content
+        if token is not None:
+            yield token
 
 
 async def stream_drug_interaction_tokens(
@@ -279,22 +285,20 @@ async def stream_drug_interaction_tokens(
         user_content += "\n\nNo database interactions found. Please analyze based on pharmacological knowledge (label as AI-generated)."
     if proposed_medications:
         user_content += f"\n\nProposed New Medications to Check:\n{json.dumps(proposed_medications)}"
-
-    def _collect() -> list[str]:
-        client = get_client()
-        stream = client.chat.completions.create(
-            model=ZAI_MODEL,
-            max_tokens=4096,
-            messages=[
-                {"role": "system", "content": DRUG_INTERACTION_SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            stream=True,
-        )
-        return [c.choices[0].delta.content for c in stream if c.choices[0].delta.content]
-
-    for token in await asyncio.to_thread(_collect):
-        yield token
+    client = get_async_client()
+    stream = await client.chat.completions.create(
+        model=ZAI_MODEL,
+        max_tokens=4096,
+        messages=[
+            {"role": "system", "content": DRUG_INTERACTION_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        stream=True,
+    )
+    async for chunk in stream:
+        token = chunk.choices[0].delta.content
+        if token is not None:
+            yield token
 
 
 async def stream_synthesis_tokens(
@@ -314,19 +318,17 @@ Drug Interaction Analysis:
 {json.dumps(interaction_results, indent=2)}"""
     if care_gaps:
         user_content += f"\n\nCare Gap Analysis:\n{json.dumps(care_gaps, indent=2)}"
-
-    def _collect() -> list[str]:
-        client = get_client()
-        stream = client.chat.completions.create(
-            model=ZAI_MODEL,
-            max_tokens=4096,
-            messages=[
-                {"role": "system", "content": SYNTHESIS_SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            stream=True,
-        )
-        return [c.choices[0].delta.content for c in stream if c.choices[0].delta.content]
-
-    for token in await asyncio.to_thread(_collect):
-        yield token
+    client = get_async_client()
+    stream = await client.chat.completions.create(
+        model=ZAI_MODEL,
+        max_tokens=4096,
+        messages=[
+            {"role": "system", "content": SYNTHESIS_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        stream=True,
+    )
+    async for chunk in stream:
+        token = chunk.choices[0].delta.content
+        if token is not None:
+            yield token
