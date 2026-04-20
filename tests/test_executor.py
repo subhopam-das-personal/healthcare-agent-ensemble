@@ -150,8 +150,8 @@ async def test_execute_fails_when_no_patient_id():
     mock_updater.update_status.assert_called_once()
     call_args = mock_updater.update_status.call_args
     from a2a.types import TaskState
-    assert call_args.kwargs.get("TaskState") == TaskState.failed or \
-           call_args.args[0] == TaskState.failed
+    assert call_args.kwargs.get("TaskState") == TaskState.input_required or \
+           call_args.args[0] == TaskState.input_required
 
 
 

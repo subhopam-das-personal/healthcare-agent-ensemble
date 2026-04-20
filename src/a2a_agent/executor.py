@@ -156,8 +156,12 @@ class CDSAgentExecutor(AgentExecutor):
         patient_id = params["patient_id"]
         if not patient_id:
             await updater.update_status(
-                TaskState.failed,
-                message=_status_msg("Error: No patient_id provided. Send a patient_id as text or JSON."),
+                TaskState.input_required,
+                message=_status_msg(
+                    "Please provide a patient ID to continue. "
+                    "You can send it as plain text (e.g. a UUID) or as JSON: "
+                    '{\"patient_id\": \"<id>\", \"skill\": \"comprehensive-clinical-review\"}'
+                ),
             )
             return
 
