@@ -8,7 +8,7 @@ from openai import AsyncOpenAI, OpenAI
 
 logger = logging.getLogger(__name__)
 
-ZAI_MODEL = "glm-5.1"
+ZAI_MODEL = "glm-4.7"
 ZAI_TIMEOUT = 60.0
 _DEFAULT_BASE_URL = "https://api.z.ai/api/paas/v4/"
 
